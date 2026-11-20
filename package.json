@@ -1,0 +1,8 @@
+{
+  "name": "vibra-social",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Vanilla HTML CSS JS Instagram-style web app powered by Supabase",
+  "scripts": { "start": "python -m http.server 8000" }
+}
