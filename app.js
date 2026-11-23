@@ -22,7 +22,7 @@ const S = {
   signed: new Map(), feedToken: 0, screenToken: 0, channel: null, chatChannel: null,
   storyPointer: 0, storyItems: [], storyStats: new Map(), storyInsightsOpen:false,
   postObserver:null, postSeen:new Set(), installPrompt:null, installed: window.matchMedia?.('(display-mode: standalone)').matches||false,
-  inboxTab:'chats', reelObserver: null, preview: false
+  inboxTab:'chats', reelObserver: null, preview: false, shareSearchResults:[], lastShareId:null, chatSummaries:new Map()
 };
 const ICON_PATHS = {
   'house':'<path d="m3 10 9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22v-8h6v8"/>',
@@ -88,6 +88,19 @@ const niceTime = d => { const t = new Date(d); const n = Math.max(0,(Date.now()-
 const num = n => n>=1e6?(n/1e6).toFixed(1)+'m':n>=1e3?(n/1e3).toFixed(1)+'k':String(n||0);
 const initials = p => (p?.display_name || p?.username || 'V').slice(0,1).toUpperCase();
 const name = p => p?.display_name || p?.username || 'Member';
+const badge = p => p?.is_verified ? I('badge-check',16,'verify-icon verified-badge') : '';
+function recentAccounts(){try{return JSON.parse(localStorage.getItem('vibra-recent-accounts')||'[]').filter(x=>typeof x==='string').slice(0,5);}catch{return [];}}
+function rememberAccount(email){if(!email)return;try{localStorage.setItem('vibra-recent-accounts',JSON.stringify([email.toLowerCase(),...recentAccounts().filter(x=>x!==email.toLowerCase())].slice(0,5)));}catch{}}
+function shareTargetMarkup(list,postId){return list.map(p=>`<button type="button" class="result-user share-person" data-action="share-to-user" data-id="${a(p.id)}" data-post="${a(postId)}">${avatar(p)}<span><strong>@${h(p.username)} ${badge(p)}</strong><small>${h(name(p))}</small></span>${I('send',19)}</button>`).join('')||'<p class="muted small">No matching users. Search by username.</p>';}
+function mentionHtml(text){return h(text||'').replace(/(^|[^\w])@([a-z0-9_]{3,24})\b/gi,(_m,prefix,handle)=>`${prefix}<button type="button" class="mention-link" data-action="profile-username" data-username="${a(handle.toLowerCase())}">@${h(handle)}</button>`);}
+function mentionPicker(input){
+ const root=input.closest('.mention-root'),host=root?.querySelector('.mention-choices');if(!host)return;
+ const before=input.value.slice(0,input.selectionStart||0),match=before.match(/(^|\s)@([a-z0-9_]{0,24})$/i);
+ if(!match){host.innerHTML='';host.hidden=true;return;}
+ const term=match[2].toLowerCase();const candidates=[...S.people.values()].filter(p=>p.id!==uid()&&p.username?.toLowerCase().startsWith(term)).slice(0,6);
+ host.innerHTML=candidates.map(p=>`<button type="button" data-action="pick-mention" data-username="${a(p.username)}">${avatar(p,'xs')} <strong>@${h(p.username)}</strong> ${badge(p)}</button>`).join('');host.hidden=!candidates.length;
+}
+
 const getProfile = id => S.people.get(id) || (id === uid() ? S.me : null);
 const dataImg = (path, alt='Photo', cls='') => `<img class="${cls}" data-private-path="${a(path)}" alt="${a(alt)}" loading="lazy" />`;
 const dataVid = (path, cls='', autoplay=false) => `<video class="${cls}" data-private-path="${a(path)}" playsinline loop muted ${autoplay?'data-autoplay="1"':''} controls preload="metadata"></video>`;
@@ -201,13 +214,13 @@ function storyProfiles() {
 function postCard(p) {
   const person=getProfile(p.user_id)||{}; const count=p.likeCount||0;
   const media=p.media||[]; const first=media[p.slide||0];
-  return `<article class="post-card" data-post-id="${p.id}"><div class="post-head"><div class="post-author">${storyAvatar(person,'sm')}<button type="button" class="post-author-name" data-action="profile" data-id="${p.user_id}"><span><strong>${h(person.username||'member')} ${I('badge-check',14,'verify-icon')}</strong><small>${h(p.location||'')} ${p.location?' · ':''}${niceTime(p.created_at)} ago</small></span></button></div><button class="icon-btn" data-action="post-options" data-id="${p.id}">${I('ellipsis',23)}</button></div>
+  return `<article class="post-card" data-post-id="${p.id}"><div class="post-head"><div class="post-author">${storyAvatar(person,'sm')}<button type="button" class="post-author-name" data-action="profile" data-id="${p.user_id}"><span><strong>${h(person.username||'member')} ${badge(person)}</strong><small>${h(p.location||'')} ${p.location?' · ':''}${niceTime(p.created_at)} ago</small></span></button></div><button class="icon-btn" data-action="post-options" data-id="${p.id}">${I('ellipsis',23)}</button></div>
     <div class="post-media">${first?(first.media_type==='video'?dataVid(first.storage_path,'post-main-video'):dataImg(first.storage_path,`Post by ${person.username}`,'post-main-img')):`<div class="post-media-missing">${I('image-off',36)}</div>`}${media.length>1?`<div class="media-pips">${media.map((_,i)=>`<span class="${i===(p.slide||0)?'selected':''}"></span>`).join('')}</div>${p.slide?`<button class="media-prev" data-action="slide" data-id="${p.id}" data-dir="-1">${I('chevron-left',18)}</button>`:''}${(p.slide||0)<media.length-1?`<button class="media-next" data-action="slide" data-id="${p.id}" data-dir="1">${I('chevron-right',18)}</button>`:''}`:''}</div>
     <div class="post-actions"><button title="Like" class="icon-btn ${p.liked?'is-liked':''}" data-action="like" data-id="${p.id}">${I('heart',25)}</button><button title="Comment" class="icon-btn" data-action="comments" data-id="${p.id}">${I('message-circle',24)}</button><button title="Share" class="icon-btn" data-action="share" data-id="${p.id}">${I('send',23)}</button><span class="spacer"></span><button title="Save" class="icon-btn ${S.saved.has(p.id)?'is-saved':''}" data-action="save" data-id="${p.id}">${I('bookmark',25)}</button></div>
     <div class="post-copy"><strong>${num(count)} ${count===1?'like':'likes'}</strong>${p.user_id===uid()?`<button type="button" class="insights-inline" data-action="post-insights" data-id="${p.id}">${I('eye',15)} View insights</button>`:''}<p><button data-action="profile" data-id="${p.user_id}" class="inline-user">${h(person.username||'member')}</button> ${captionHtml(p.caption)}</p><button class="comment-link" data-action="comments" data-id="${p.id}">View comments${p.commentCount?' · '+num(p.commentCount):''}</button></div>
-    ${canCommentOn(p.user_id)?`<form class="quick-comment" data-form="comment" data-post-id="${p.id}"><input name="body" placeholder="Add a comment..." maxlength="1000" required aria-label="Add a comment"/><button type="submit">Post</button></form>`:'<div class="comment-closed">Comments are limited by this account.</div>'}</article>`;
+    ${canCommentOn(p.user_id)?`<form class="quick-comment" data-form="comment" data-post-id="${p.id}"><div class="mention-root"><input name="body" data-mention-input="1" placeholder="Add a comment... @friend" maxlength="1000" required aria-label="Add a comment" autocomplete="off"/><div class="mention-choices" hidden></div></div><button type="submit">Post</button></form>`:'<div class="comment-closed">Comments are limited by this account.</div>'}</article>`;
 }
-function captionHtml(c) { return h(c||'').replace(/(^|\s)(#[\w]+)/g,(_m,w,t)=>`${w}<button class="hashtag" data-action="tag" data-tag="${a(t)}">${t}</button>`).replace(/\n/g,'<br>'); }
+function captionHtml(c) { return mentionHtml(c||'').replace(/(^|\s)(#[\w]+)/g,(_m,w,t)=>`${w}<button class="hashtag" data-action="tag" data-tag="${a(t)}">${t}</button>`).replace(/\n/g,'<br>'); }
 function emptyState(icon,title,desc,button,view) {
   return `<div class="empty-state"><div class="empty-icon">${I(icon,35)}</div><h2>${h(title)}</h2><p>${h(desc)}</p>${button?`<button class="primary-btn" data-action="nav" data-view="${view}">${h(button)}</button>`:''}</div>`;
 }
@@ -219,7 +232,7 @@ function exploreMarkup() {
 function reelsMarkup() {
   return `<div class="reels-page"><header class="reels-top"><h1>Reels <span class="reel-star">✦</span></h1><button class="outline-btn" data-action="open-create" data-type="reel">${I('plus',18)} Create reel</button></header><div class="reel-scroll">${S.reels.length?S.reels.map(p=>{
     const pers=getProfile(p.user_id)||{}; const media=p.media?.find(m=>m.media_type==='video');
-    return `<div class="reel-item" data-reel-id="${p.id}"><div class="reel-video">${media?dataVid(media.storage_path,'reel-vid',true):''}<div class="reel-shade"></div><div class="reel-info"><button data-action="profile" data-id="${p.user_id}" class="reel-user">${avatar(pers,'sm')}<strong>@${h(pers.username)}</strong></button><p>${captionHtml(p.caption)}</p></div></div><div class="reel-actions"><button data-action="like" data-id="${p.id}" class="${p.liked?'is-liked':''}">${I('heart',27)}<span>${num(p.likeCount||0)}</span></button><button data-action="comments" data-id="${p.id}">${I('message-circle',27)}<span>${num(p.commentCount||0)}</span></button><button data-action="share" data-id="${p.id}">${I('send',27)}</button><button data-action="save" data-id="${p.id}" class="${S.saved.has(p.id)?'is-saved':''}">${I('bookmark',27)}</button></div></div>`}).join(''):emptyState('clapperboard','No reels yet','Be the first to publish a video reel.','Go home','home')}</div></div>`;
+    return `<div class="reel-item" data-reel-id="${p.id}"><div class="reel-video">${media?dataVid(media.storage_path,'reel-vid',true):''}<div class="reel-shade"></div><div class="reel-info"><button data-action="profile" data-id="${p.user_id}" class="reel-user">${avatar(pers,'sm')}<strong>@${h(pers.username)} ${badge(pers)}</strong></button><p>${captionHtml(p.caption)}</p></div></div><div class="reel-actions"><button data-action="like" data-id="${p.id}" class="${p.liked?'is-liked':''}">${I('heart',27)}<span>${num(p.likeCount||0)}</span></button><button data-action="comments" data-id="${p.id}">${I('message-circle',27)}<span>${num(p.commentCount||0)}</span></button><button data-action="share" data-id="${p.id}">${I('send',27)}</button><button data-action="save" data-id="${p.id}" class="${S.saved.has(p.id)?'is-saved':''}">${I('bookmark',27)}</button></div></div>`}).join(''):emptyState('clapperboard','No reels yet','Be the first to publish a video reel.','Go home','home')}</div></div>`;
 }
 function profileMarkup() {
   const p=S.viewUser ? getProfile(S.viewUser) : S.me;
@@ -229,7 +242,7 @@ function profileMarkup() {
   const privateLocked=p.is_private && !own && relation!=='accepted';
   const visible=S.profileTab==='saved'&&own ? [...S.posts.values()].filter(x=>S.saved.has(x.id)) : S.profileTab==='reels'?posts.filter(x=>x.is_reel):posts;
   return `<div class="content-page profile-page"><div class="profile-cover"><div class="cover-orb one"></div><div class="cover-orb two"></div><span class="cover-label">COLLECT MOMENTS • MAKE MEMORIES</span></div>
-    <div class="profile-info"><div class="profile-avatar">${storyAvatar(p,'xl')}</div><div class="profile-metadata"><div class="profile-title"><div><h1>${h(p.display_name||p.username)} ${p.is_private?I('lock',17):''}</h1><p>@${h(p.username)}</p></div><div class="profile-buttons">${own?`<button class="outline-btn" data-action="edit-profile">${I('pencil',17)} Edit profile</button><button class="rounded-icon" data-action="open-settings">${I('settings',21)}</button>`:`<button class="${relation==='accepted'?'outline-btn':'primary-btn'}" data-action="follow" data-id="${p.id}">${I(relation==='accepted'?'user-check':relation==='pending'?'clock':'user-plus',17)} ${relation==='accepted'?'Following':relation==='pending'?'Requested':'Follow'}</button><button class="outline-btn" data-action="dm-user" data-id="${p.id}">${I('send',17)} Message</button><button class="rounded-icon" data-action="profile-options" data-id="${p.id}">${I('ellipsis')}</button>`}</div></div>
+    <div class="profile-info"><div class="profile-avatar">${storyAvatar(p,'xl')}</div><div class="profile-metadata"><div class="profile-title"><div><h1>${h(p.display_name||p.username)} ${p.is_private?I('lock',17):''}</h1><p>@${h(p.username)} ${badge(p)}</p></div><div class="profile-buttons">${own?`<button class="outline-btn" data-action="edit-profile">${I('pencil',17)} Edit profile</button><button class="rounded-icon" data-action="open-settings">${I('settings',21)}</button>`:`<button class="${relation==='accepted'?'outline-btn':'primary-btn'}" data-action="follow" data-id="${p.id}">${I(relation==='accepted'?'user-check':relation==='pending'?'clock':'user-plus',17)} ${relation==='accepted'?'Following':relation==='pending'?'Requested':'Follow'}</button><button class="outline-btn" data-action="dm-user" data-id="${p.id}">${I('send',17)} Message</button><button class="rounded-icon" data-action="profile-options" data-id="${p.id}">${I('ellipsis')}</button>`}</div></div>
       <div class="profile-stats"><span><b>${num(privateLocked?0:posts.length)}</b> posts</span><button data-action="follow-list" data-id="${p.id}" data-type="followers"><b>${num(p.followersCount||0)}</b> followers</button><button data-action="follow-list" data-id="${p.id}" data-type="following"><b>${num(p.followingCount||0)}</b> following</button></div>
       <div class="profile-bio"><p>${h(p.bio||'Sharing little pieces of life ✨')}</p>${p.website?`<a href="${a(safeLink(p.website))}" target="_blank" rel="noopener noreferrer">${I('link',15)} ${h(p.website)}</a>`:''}</div></div></div>
     ${privateLocked?`<div class="private-profile">${I('lock-keyhole',34)}<h3>This account is private</h3><p>Follow to see photos and videos.</p></div>`:`<div class="profile-tabs"><button class="${S.profileTab==='posts'?'selected':''}" data-action="profile-tab" data-tab="posts">${I('grid-3x3',17)} POSTS</button><button class="${S.profileTab==='reels'?'selected':''}" data-action="profile-tab" data-tab="reels">${I('clapperboard',17)} REELS</button>${own?`<button class="${S.profileTab==='saved'?'selected':''}" data-action="profile-tab" data-tab="saved">${I('bookmark',17)} SAVED</button>`:''}</div><div class="profile-grid">${visible.length?visible.map(post=>{const m=post.media?.[0];return `<button data-action="comments" data-id="${post.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Post photo','tile-media')):''}<span class="tile-overlay">${I('heart',17)} ${num(post.likeCount||0)}</span>${post.is_reel?`<i class="tile-reel">${I('clapperboard',21)}</i>`:''}</button>`}).join(''):`<div class="grid-empty">${I('camera',32)}<h3>No posts to show</h3><p>When moments are shared, they’ll appear here.</p></div>`}</div>`}</div>`;
@@ -242,15 +255,20 @@ function searchMarkup() {
 }
 function searchResultsMarkup() {
   if(!S.searchText.trim()) return `<div class="search-intro">${I('search-check',36)}<h3>What inspires you?</h3><p>Try a username or #hashtag to find moments worth keeping.</p></div>`;
-  return `<h3 class="result-heading">People</h3><div class="result-list">${S.searchResults.map(p=>`<button class="result-user" data-action="profile" data-id="${p.id}">${avatar(p,'lg')}<span><strong>${h(p.username)}</strong><small>${h(name(p))}</small></span>${I('chevron-right',19)}</button>`).join('')||'<p class="muted">No matching people.</p>'}</div><h3 class="result-heading">Posts</h3><div class="explore-grid search-grid">${S.searchPosts.map(p=>{const m=p.media?.[0];return `<button class="explore-item" data-action="comments" data-id="${p.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Post photo','tile-media')):''}</button>`}).join('')||'<p class="muted">No matching captions.</p>'}</div>`;
+  return `<h3 class="result-heading">People</h3><div class="result-list">${S.searchResults.map(p=>`<button class="result-user" data-action="profile" data-id="${p.id}">${avatar(p,'lg')}<span><strong>${h(p.username)} ${badge(p)}</strong><small>${h(name(p))}</small></span>${I('chevron-right',19)}</button>`).join('')||'<p class="muted">No matching people.</p>'}</div><h3 class="result-heading">Posts</h3><div class="explore-grid search-grid">${S.searchPosts.map(p=>{const m=p.media?.[0];return `<button class="explore-item" data-action="comments" data-id="${p.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Post photo','tile-media')):''}</button>`}).join('')||'<p class="muted">No matching captions.</p>'}</div>`;
 }
 function notificationsMarkup() {
   return `<div class="content-page notifications-page"><div class="section-heading"><div><p class="eyebrow">THE LITTLE THINGS</p><h1>Activity<span class="brand-dot">.</span></h1><p>All the love, all in one place.</p></div><button class="outline-btn" data-action="read-all">${I('check-check',17)} Mark read</button></div>
     <div class="activity-list">${S.notifications.length?S.notifications.map(n=>{
       const p=getProfile(n.actor_id)||{}; const messages={like:'liked your post',comment:'commented on your post',follow:'started following you',follow_request:'requested to follow you',follow_accept:'accepted your follow request',message:'sent you a message'};
       const go=['like','comment'].includes(n.kind)?'notification-post':n.kind==='message'?'notification-chat':'profile';
-      return `<div class="activity-item ${n.is_read?'':'unread'}"><button class="activity-person" data-action="${go}" data-id="${n.target_id||n.actor_id}" data-actor="${n.actor_id}">${avatar(p,'md')}<span><strong>${h(p.username||'someone')}</strong> ${h(messages[n.kind]||'interacted with you')}<small>${niceTime(n.created_at)} ago</small></span></button>${n.kind==='follow_request'?`<button class="primary-btn btn-small" data-action="accept-follow" data-id="${n.actor_id}">Confirm</button>`:I('chevron-right',18,'activity-arrow')}</div>`;
+      return `<div class="activity-item ${n.is_read?'':'unread'}"><button class="activity-person" data-action="${go}" data-id="${n.target_id||n.actor_id}" data-actor="${n.actor_id}">${avatar(p,'md')}<span><strong>${h(p.username||'someone')} ${badge(p)}</strong> ${h(messages[n.kind]||'interacted with you')}<small>${niceTime(n.created_at)} ago</small></span></button>${n.kind==='follow_request'?`<button class="primary-btn btn-small" data-action="accept-follow" data-id="${n.actor_id}">Confirm</button>`:I('chevron-right',18,'activity-arrow')}</div>`;
     }).join(''):emptyState('heart','All quiet for now','When people interact with you, you’ll see it here.','','')}</div></div>`;
+}
+function sharedMessage(postId){
+ const p=S.posts.get(postId),media=p?.media?.[0],author=getProfile(p?.user_id);
+ if(!p)return `<div class="dm-shared-unavailable">${I('lock',16)} Shared post unavailable or private</div>`;
+ return `<button type="button" class="dm-shared-card" data-action="open-shared-post" data-id="${a(postId)}">${media?(media.media_type==='video'?dataVid(media.storage_path,'dm-shared-thumb'):dataImg(media.storage_path,'Shared post','dm-shared-thumb')):''}<span class="dm-share-copy"><strong>${p.is_reel?'Shared reel':'Shared post'}</strong><small>@${h(author?.username||'member')} ${badge(author)}</small><em>Tap to view</em></span>${I('chevron-right',18)}</button>`;
 }
 function messagesMarkup() {
   const active=S.conversations.find(c=>c.id===S.activeChat);
@@ -259,9 +277,10 @@ function messagesMarkup() {
   const partner=active?getProfile(active.created_by===uid()?active.recipient_id:active.created_by):null;
   return `<div class="messages-page"><div class="inbox-list"><div class="inbox-head"><div><span class="eyebrow">DIRECT MESSAGES</span><h1>Inbox</h1></div><button class="rounded-icon" data-action="new-chat">${I('square-pen',22)}</button></div><div class="inbox-tabs"><button class="${S.inboxTab==='chats'?'selected':''}" data-action="inbox-tab" data-tab="chats">Messages</button><button class="${S.inboxTab==='requests'?'selected':''}" data-action="inbox-tab" data-tab="requests">Requests ${requests.length?`<b>${requests.length}</b>`:''}</button></div><div class="inbox-filter">${I('search',19)}<input placeholder="Find a conversation" id="chat-filter" /></div><div id="chat-list">${threads.length?threads.map(c=>{
     const id=c.created_by===uid()?c.recipient_id:c.created_by; const p=getProfile(id)||{};
-    return `<button class="thread-item ${S.activeChat===c.id?'selected':''}" data-action="open-chat" data-id="${c.id}" data-username="${a(p.username)}">${avatar(p,'lg')}<span><strong>${h(name(p))}</strong><small>@${h(p.username)} ${c.status==='pending'?'· Pending':''}</small></span>${I('chevron-right',16)}</button>`;
+    const sum=S.chatSummaries.get(c.id),last=sum?.last,excerpt=last?(last.shared_post_id?'Shared a post/reel':last.media_type?'Sent a photo or video':last.body||'New message'):null;
+    return `<button class="thread-item ${S.activeChat===c.id?'selected':''}" data-action="open-chat" data-id="${c.id}" data-username="${a(p.username)}">${avatar(p,'lg')}<span><strong>${h(name(p))} ${badge(p)}</strong><small>@${h(p.username)} ${c.status==='pending'?'· Pending':''}</small>${excerpt?`<small class="thread-preview">${last.sender_id===uid()?'You: ':''}${h(excerpt.slice(0,75))}</small>`:''}</span>${sum?.unread?`<b class="dm-unread-count">${Math.min(99,sum.unread)}</b>`:I('chevron-right',16)}</button>`;
   }).join(''):`<div class="empty-thread">${I('send',30)}<p>${S.inboxTab==='requests'?'No message requests.':'No chats yet.'}</p>${S.inboxTab==='chats'?'<button class="text-link" data-action="new-chat">Start a conversation</button>':''}</div>`}</div></div>
-    <div class="chat-panel">${active?`<div class="chat-header"><button class="back-chat" data-action="close-chat">${I('arrow-left',22)}</button><button class="chat-peer" data-action="profile" data-id="${partner?.id}">${avatar(partner,'sm')}<span><strong>${h(name(partner))}</strong><small>@${h(partner?.username)}</small></span></button></div>${active.status==='pending'?`<div class="request-banner">${active.recipient_id===uid()?`<p>Message request · Accept to reply to ${h(name(partner))}.</p><div><button class="primary-btn btn-small" data-action="request-decision" data-id="${active.id}" data-status="accepted">Accept</button><button class="outline-btn btn-small" data-action="request-decision" data-id="${active.id}" data-status="declined">Decline</button></div>`:`<p>Request pending · ${h(name(partner))} has not accepted your message yet.</p>`}</div>`:''}<div class="chat-scroll" id="chat-scroll">${S.messages.length?S.messages.map(m=>`<div class="message-row ${m.sender_id===uid()?'mine':'theirs'}"><div class="message-bubble">${m.media_path?(m.media_type==='video'?dataVid(m.media_path,'chat-media'):dataImg(m.media_path,'Chat attachment','chat-media')):''}${m.body?`<p>${h(m.body)}</p>`:''}<small>${niceTime(m.created_at)}${m.sender_id===uid()&&m.read_at?' · Seen':''}</small></div></div>`).join(''):`<div class="chat-welcome">${avatar(partner,'xl')}<h3>${h(name(partner))}</h3><p>Say hello and start a conversation.</p></div>`}</div>${active.status==='accepted'||(active.status==='pending'&&active.created_by===uid()&&!S.messages.length)?`<form class="chat-compose" data-form="message"><label class="chat-attach" title="Attach photo or video">${I('image-plus',22)}<input type="file" id="chat-attachment" accept="image/*,video/mp4,video/webm,video/quicktime" hidden></label><input name="body" placeholder="Message..." autocomplete="off" maxlength="4000" /><button class="send-btn" type="submit">${I('send',19)}</button></form><div class="attachment-caption" id="chat-file-label"></div>`:`<div class="chat-disabled">${active.recipient_id===uid()?'Accept this request to reply.':'Waiting for request approval.'}</div>`}`:`<div class="no-chat">${I('messages-square',44)}<h2>Your messages</h2><p>Send private photos and messages to your people.</p><button class="primary-btn" data-action="new-chat">${I('send',18)} Send message</button></div>`}</div></div>`;
+    <div class="chat-panel">${active?`<div class="chat-header"><button class="back-chat" data-action="close-chat">${I('arrow-left',22)}</button><button class="chat-peer" data-action="profile" data-id="${partner?.id}">${avatar(partner,'sm')}<span><strong>${h(name(partner))} ${badge(partner)}</strong><small>@${h(partner?.username)}</small></span></button></div>${active.status==='pending'?`<div class="request-banner">${active.recipient_id===uid()?`<p>Message request · Reply to ${h(name(partner))} to automatically accept, or use Accept/Decline.</p><div><button class="primary-btn btn-small" data-action="request-decision" data-id="${active.id}" data-status="accepted">Accept</button><button class="outline-btn btn-small" data-action="request-decision" data-id="${active.id}" data-status="declined">Decline</button></div>`:`<p>Request pending · ${h(name(partner))} has not accepted your message yet.</p>`}</div>`:''}<div class="chat-scroll" id="chat-scroll">${S.messages.length?S.messages.map(m=>`<div class="message-row ${m.sender_id===uid()?'mine':'theirs'}"><div class="message-bubble">${m.shared_post_id?sharedMessage(m.shared_post_id):''}${m.media_path?(m.media_type==='video'?dataVid(m.media_path,'chat-media'):dataImg(m.media_path,'Chat attachment','chat-media')):''}${m.body?`<p>${mentionHtml(m.body)}</p>`:''}<small>${niceTime(m.created_at)}${m.sender_id===uid()&&m.read_at?' · Seen':''}</small>${m.sender_id===uid()?`<button type="button" class="dm-unsend" data-action="unsend-message" data-id="${a(m.id)}">Unsend</button>`:''}</div></div>`).join(''):`<div class="chat-welcome">${avatar(partner,'xl')}<h3>${h(name(partner))}</h3><p>Say hello and start a conversation.</p></div>`}</div>${active.status==='accepted'||(active.status==='pending'&&(active.recipient_id===uid()||(active.created_by===uid()&&!S.messages.length)))?`<form class="chat-compose" data-form="message"><label class="chat-attach" title="Attach photo or video">${I('image-plus',22)}<input type="file" id="chat-attachment" accept="image/*,video/mp4,video/webm,video/quicktime" hidden></label><input name="body" placeholder="Message..." autocomplete="off" maxlength="4000" /><button class="send-btn" type="submit">${I('send',19)}</button></form><div class="attachment-caption" id="chat-file-label"></div>`:`<div class="chat-disabled">${active.recipient_id===uid()?'Reply to accept automatically.':'Waiting for request approval.'}</div>`}`:`<div class="no-chat">${I('messages-square',44)}<h2>Your messages</h2><p>Send private photos and messages to your people.</p><button class="primary-btn" data-action="new-chat">${I('send',18)} Send message</button></div>`}</div></div>`;
 }
 function installReelObserver() {
   if(S.reelObserver) S.reelObserver.disconnect();
@@ -290,19 +309,19 @@ function modalMarkup() {
     <div class="settings-row"><div>${I('lock-keyhole',22)}<span><strong>Private account</strong><small>Only approved followers can see your posts</small></span></div><button class="switch ${S.me?.is_private?'checked':''}" data-action="toggle-private" role="switch" aria-checked="${!!S.me?.is_private}"><span></span></button></div>
     <div class="privacy-section"><h3>Privacy and interactions</h3><label class="privacy-control"><span><strong>Who can comment</strong><small>Applies to new comments on your posts</small></span><select data-setting="comment_privacy"><option value="everyone" ${S.me?.comment_privacy==='everyone'?'selected':''}>Everyone</option><option value="followers" ${S.me?.comment_privacy==='followers'?'selected':''}>Followers</option><option value="off" ${S.me?.comment_privacy==='off'?'selected':''}>Off</option></select></label><label class="privacy-control"><span><strong>Who can message me</strong><small>New contacts go to Message requests</small></span><select data-setting="message_privacy"><option value="everyone" ${S.me?.message_privacy==='everyone'?'selected':''}>Everyone</option><option value="followers" ${S.me?.message_privacy==='followers'?'selected':''}>Followers</option><option value="none" ${S.me?.message_privacy==='none'?'selected':''}>Nobody</option></select></label><label class="privacy-control"><span><strong>Who sees my stories</strong><small>Followers means approved followers only</small></span><select data-setting="story_audience"><option value="everyone" ${S.me?.story_audience==='everyone'?'selected':''}>Everyone allowed by account privacy</option><option value="followers" ${S.me?.story_audience==='followers'?'selected':''}>Followers only</option></select></label></div>
     <div class="settings-row"><div>${I('sun-moon',22)}<span><strong>Light appearance</strong><small>Switch between light and dark</small></span></div><button class="switch ${S.light?'checked':''}" data-action="toggle-theme" role="switch" aria-checked="${!!S.light}"><span></span></button></div>
-    <button class="settings-link" data-action="install-app">${I('download',21)} Install Vibra on phone ${I('chevron-right',17)}</button><button class="settings-link" data-action="edit-profile">${I('user-round-pen',21)} Edit profile ${I('chevron-right',17)}</button><button class="settings-link" data-action="change-password">${I('key-round',21)} Change password ${I('chevron-right',17)}</button><button class="settings-link" data-action="blocked-list">${I('shield-ban',21)} Blocked accounts (${S.blocked.size}) ${I('chevron-right',17)}</button><button class="settings-link danger" data-action="logout">${I('log-out',21)} Log out ${I('chevron-right',17)}</button><p class="settings-tip">Your posts, messages and follows are stored securely in your Supabase project, not only on this device.</p></div></div>`;
+    <button class="settings-link" data-action="install-app">${I('download',21)} Install Vibra on phone ${I('chevron-right',17)}</button><button class="settings-link" data-action="edit-profile">${I('user-round-pen',21)} Edit profile ${I('chevron-right',17)}</button><button class="settings-link" data-action="change-password">${I('key-round',21)} Change password ${I('chevron-right',17)}</button><button class="settings-link" data-action="blocked-list">${I('shield-ban',21)} Blocked accounts (${S.blocked.size}) ${I('chevron-right',17)}</button><button class="settings-link" data-action="switch-account">${I('users',21)} Switch / add account ${I('chevron-right',17)}</button><button class="settings-link danger" data-action="logout">${I('log-out',21)} Log out ${I('chevron-right',17)}</button><p class="settings-tip">Your posts, messages and follows are stored securely in your Supabase project, not only on this device.</p></div></div>`;
   if(m.type==='password') return `<div class="modal-backdrop" data-action="close-modal"><div class="dialog small-dialog" role="dialog" aria-modal="true"><div class="dialog-head"><h2>Update password</h2>${close}</div><form data-form="new-password"><label>New password<input name="password" type="password" minlength="8" required autocomplete="new-password" placeholder="At least 8 characters" /></label><button type="submit" class="primary-btn btn-full">Update password</button></form></div></div>`;
   if(m.type==='blocked') return `<div class="modal-backdrop" data-action="close-modal"><div class="dialog small-dialog" role="dialog" aria-modal="true"><div class="dialog-head"><h2>Blocked accounts</h2>${close}</div><div class="result-list">${[...S.blocked].map(id=>{const p=getProfile(id);return `<div class="result-user">${avatar(p)}<span><strong>${h(p?.username||'Member')}</strong></span><button class="outline-btn" data-action="unblock" data-id="${id}">Unblock</button></div>`}).join('')||'<p class="muted">You have not blocked anyone.</p>'}</div></div></div>`;
   if(m.type==='comments') {
     const p=S.posts.get(m.postId);if(!p) return '';
     const person=getProfile(p.user_id),first=p.media?.[0];
     return `<div class="modal-backdrop" data-action="close-modal"><div class="dialog comments-dialog" role="dialog" aria-modal="true"><div class="detail-media">${first?(first.media_type==='video'?dataVid(first.storage_path,'detail-photo'):dataImg(first.storage_path,'Post image','detail-photo')):''}</div>
-      <div class="detail-side"><div class="dialog-head detail-user"><button class="post-author" data-action="profile" data-id="${p.user_id}">${avatar(person,'sm')}<span><strong>${h(person?.username)}</strong><small>${niceTime(p.created_at)} ago</small></span></button>${close}</div>
-        <div class="detail-comments"><div class="detail-caption">${avatar(person,'sm')}<p><strong>${h(person?.username)}</strong> ${captionHtml(p.caption)}</p></div>${m.comments?.length?m.comments.map(c=>{
-          const p2=getProfile(c.user_id);return `<div class="comment-entry ${c.parent_id?'is-reply':''}">${avatar(p2,'sm')}<div><p><strong>${h(p2?.username||'member')}</strong> ${h(c.body)}</p><small>${niceTime(c.created_at)}${canCommentOn(p.user_id)?` · <button data-action="reply" data-id="${c.id}" data-username="${a(p2?.username||'member')}">Reply</button>`:''}${c.user_id===uid()||p.user_id===uid()?` · <button data-action="delete-comment" data-id="${c.id}">Delete</button>`:''}</small></div></div>`;
+      <div class="detail-side"><div class="dialog-head detail-user"><button class="post-author" data-action="profile" data-id="${p.user_id}">${avatar(person,'sm')}<span><strong>${h(person?.username)} ${badge(person)}</strong><small>${niceTime(p.created_at)} ago</small></span></button>${close}</div>
+        <div class="detail-comments"><div class="detail-caption">${avatar(person,'sm')}<p><strong>${h(person?.username)} ${badge(person)}</strong> ${captionHtml(p.caption)}</p></div>${m.comments?.length?m.comments.map(c=>{
+          const p2=getProfile(c.user_id);return `<div class="comment-entry ${c.parent_id?'is-reply':''}">${avatar(p2,'sm')}<div><p><strong>${h(p2?.username||'member')} ${badge(p2)}</strong> ${mentionHtml(c.body)}</p><small>${niceTime(c.created_at)}${canCommentOn(p.user_id)?` · <button data-action="reply" data-id="${c.id}" data-username="${a(p2?.username||'member')}">Reply</button>`:''}${c.user_id===uid()||p.user_id===uid()?` · <button data-action="delete-comment" data-id="${c.id}">Delete</button>`:''}</small></div></div>`;
         }).join(''):'<div class="muted empty-comments">No comments yet. Start the conversation.</div>'}</div>
         <div class="detail-actionbar"><button class="icon-btn ${p.liked?'is-liked':''}" data-action="like" data-id="${p.id}">${I('heart',23)}</button><button class="icon-btn" data-action="share" data-id="${p.id}">${I('send',22)}</button><button class="icon-btn ${S.saved.has(p.id)?'is-saved':''}" data-action="save" data-id="${p.id}">${I('bookmark',23)}</button><span>${num(p.likeCount||0)} likes</span></div>
-        ${canCommentOn(p.user_id)?`<form class="detail-reply" data-form="comment" data-post-id="${p.id}"><input name="body" required maxlength="1000" placeholder="${m.replyTo?'Reply to @'+m.replyTo.username:'Add a comment...'}" /><input type="hidden" name="parent_id" value="${a(m.replyTo?.id||'')}" /><button type="submit">Post</button></form>`:'<div class="comment-closed">This account limits who can comment.</div>'}</div></div></div>`;
+        ${canCommentOn(p.user_id)?`<form class="detail-reply" data-form="comment" data-post-id="${p.id}"><div class="mention-root"><input name="body" data-mention-input="1" required maxlength="1000" placeholder="${m.replyTo?'Reply to @'+m.replyTo.username:'Add a comment... @friend'}" autocomplete="off" /><div class="mention-choices" hidden></div></div><input type="hidden" name="parent_id" value="${a(m.replyTo?.id||'')}" /><button type="submit">Post</button></form>`:'<div class="comment-closed">This account limits who can comment.</div>'}</div></div></div>`;
   }
   if(m.type==='story') {
     const st=S.storyItems[S.storyPointer]; if(!st) return '';
@@ -326,6 +345,10 @@ function modalMarkup() {
     const post=S.posts.get(m.postId);return `<div class="modal-backdrop" data-action="close-modal"><div class="dialog options-dialog" role="dialog" aria-modal="true"><div class="dialog-head"><h2>Post options</h2>${close}</div><button class="settings-link" data-action="share" data-id="${post.id}">${I('link',21)} Share post</button>${post.user_id===uid()?`<button class="settings-link" data-action="post-insights" data-id="${post.id}">${I('eye',21)} View insights</button><button class="settings-link" data-action="edit-post" data-id="${post.id}">${I('pencil',21)} Edit caption & location</button><button class="settings-link danger" data-action="delete-post" data-id="${post.id}">${I('trash-2',21)} Delete post</button>`:''}</div></div>`;
   }
   if(m.type==='profile-options') return `<div class="modal-backdrop" data-action="close-modal"><div class="dialog options-dialog" role="dialog" aria-modal="true"><div class="dialog-head"><h2>Account options</h2>${close}</div><button class="settings-link danger" data-action="block" data-id="${m.userId}">${I('shield-ban',21)} Block this account</button></div></div>`;
+  if(m.type==='share-post'){
+    const item=S.posts.get(m.postId),people=(m.filtered||[...S.people.values()]).filter(p=>p.id!==uid()&&!S.blocked.has(p.id)).slice(0,35);
+    return `<div class="modal-backdrop" data-action="close-modal"><div class="dialog small-dialog share-dialog" role="dialog" aria-modal="true"><div class="dialog-head"><div><span class="eyebrow">SEND IN VIBRA</span><h2>Share ${item?.is_reel?'reel':'post'} with friends</h2></div>${close}</div><div class="large-search tiny-search">${I('search',20)}<input id="share-search" placeholder="Search username..." autocomplete="off" /></div><div class="share-people" id="share-targets">${shareTargetMarkup(people,m.postId)}</div><div class="share-footer"><button class="outline-btn" data-action="copy-share-link" data-id="${a(m.postId)}">${I('link',17)} Copy link</button><p class="muted small">Private reels can only be sent to accounts allowed to view them.</p></div></div></div>`;
+  }
   if(m.type==='new-chat') return `<div class="modal-backdrop" data-action="close-modal"><div class="dialog small-dialog" role="dialog" aria-modal="true"><div class="dialog-head"><div><span class="eyebrow">START A CONVERSATION</span><h2>New message</h2></div>${close}</div><div class="large-search tiny-search">${I('search',20)}<input id="dm-search" placeholder="Search a username" /></div><div id="dm-results" class="result-list">${[...S.people.values()].filter(p=>p.id!==uid()).slice(0,20).map(p=>`<button data-action="dm-user" data-id="${p.id}" class="result-user">${avatar(p)}<span><strong>${h(p.username)}</strong><small>${h(name(p))}</small></span>${I('send',17)}</button>`).join('')}</div></div></div>`;
   if(m.type==='follow-list') return `<div class="modal-backdrop" data-action="close-modal"><div class="dialog small-dialog" role="dialog" aria-modal="true"><div class="dialog-head"><h2>${h(m.label)}</h2>${close}</div><div class="result-list">${m.people?.length?m.people.map(p=>`<button class="result-user" data-action="profile" data-id="${p.id}">${avatar(p)}<span><strong>${h(p.username)}</strong><small>${h(name(p))}</small></span>${I('chevron-right',19)}</button>`).join(''):'<p class="muted">No accounts to show.</p>'}</div></div></div>`;
   return '';
@@ -417,11 +440,24 @@ async function fetchNotifications() {
 async function fetchConversations() {
   const id=uid();
   const rows=check(await db.from('conversations').select('*').or(`created_by.eq.${id},recipient_id.eq.${id}`).order('created_at',{ascending:false}).limit(120));
+  S.chatSummaries=new Map();
+  if(rows.length){
+    const previews=check(await db.from('messages').select('id,conversation_id,sender_id,body,media_type,shared_post_id,created_at,read_at').in('conversation_id',rows.map(c=>c.id)).order('created_at',{ascending:false}).limit(500));
+    previews.forEach(m=>{
+      const old=S.chatSummaries.get(m.conversation_id)||{unread:0,last:null};
+      if(!old.last)old.last=m;
+      if(m.sender_id!==uid()&&!m.read_at)old.unread++;
+      S.chatSummaries.set(m.conversation_id,old);
+    });
+    rows.sort((a,b)=>new Date(S.chatSummaries.get(b.id)?.last?.created_at||b.created_at)-new Date(S.chatSummaries.get(a.id)?.last?.created_at||a.created_at));
+  }
   S.conversations=rows; await ensureProfiles(rows.flatMap(c=>[c.created_by,c.recipient_id]));
 }
 async function fetchMessages(id) {
   const rows=check(await db.from('messages').select('*').eq('conversation_id',id).order('created_at',{ascending:true}).limit(200));
   S.messages=rows;
+  const related=[...new Set(rows.map(m=>m.shared_post_id).filter(Boolean))].filter(id=>!S.posts.has(id));
+  if(related.length){const posts=check(await db.from('posts').select('*').in('id',related).limit(100));await hydratePosts(posts);}
   const {error}=await db.from('messages').update({read_at:new Date().toISOString()}).eq('conversation_id',id).neq('sender_id',uid()).is('read_at',null);
   if(error)console.warn('Could not mark messages read:',error.message);
 }
@@ -434,7 +470,9 @@ async function fetchSavedPosts() {
 }
 async function loadProfileView(id) {
   if(!id)return;
-  await ensureProfiles([id]);
+  const fresh=check(await db.from('profiles').select('*').eq('id',id).limit(1));
+  if(fresh[0]){S.people.set(id,{...S.people.get(id),...fresh[0]});if(id===uid())S.me=S.people.get(id);}
+  else await ensureProfiles([id]);
   const [posts,followers,following]=await Promise.all([
     db.from('posts').select('*').eq('user_id',id).order('created_at',{ascending:false}).limit(90),
     db.from('follows').select('*',{count:'exact',head:true}).eq('following_id',id).eq('status','accepted'),
@@ -735,25 +773,58 @@ async function openChat(id) {
   await fetchMessages(id);
   if(S.chatChannel)await db.removeChannel(S.chatChannel);
   S.chatChannel=db.channel(`vibra-dm-${id}`).on('postgres_changes',{event:'*',schema:'public',table:'messages',filter:`conversation_id=eq.${id}`},async()=>{
-    if(S.activeChat===id&&S.view==='messages'){try{await fetchMessages(id);render();scrollChat();}catch(e){console.warn(e);}}
+    if(S.activeChat===id&&S.view==='messages'){try{await fetchMessages(id);await fetchConversations();render();scrollChat();}catch(e){console.warn(e);}}
   }).subscribe();
   render();scrollChat();
 }
 function scrollChat() {setTimeout(()=>{const e=document.getElementById('chat-scroll');if(e)e.scrollTop=e.scrollHeight;},50);}
-async function sendMessage(body,file) {
+async function sendMessage(body,file,sharedPostId=null) {
   if(!S.activeChat)throw Error('Select a conversation first');
-  if(!body?.trim()&&!file)throw Error('Write a message or attach a file');
+  if(!body?.trim()&&!file&&!sharedPostId)throw Error('Write a message, attach a file, or share a reel');
   let path=null;
   try {
     if(file)path=await upload(file);
-    check(await db.from('messages').insert({conversation_id:S.activeChat,sender_id:uid(),body:body.trim(),media_path:path,media_type:file?(file.type.startsWith('video/')?'video':'image'):null}));
+    check(await db.from('messages').insert({conversation_id:S.activeChat,sender_id:uid(),body:body.trim(),media_path:path,media_type:file?(file.type.startsWith('video/')?'video':'image'):null,shared_post_id:sharedPostId}));
     await fetchMessages(S.activeChat);await fetchConversations();render();scrollChat();
   } catch(e){if(path) await db.storage.from('media').remove([path]);throw e;}
 }
-async function sharePost(id) {
-  const url=`${location.origin}${location.pathname}?post=${encodeURIComponent(id)}`;
-  if(navigator.share){try{await navigator.share({title:'A moment on Vibra',url});return;}catch(e){if(e.name==='AbortError')return;}}
-  await navigator.clipboard.writeText(url);toast('Post link copied');
+async function sharePost(id){
+ const post=S.posts.get(id);if(!post)throw Error('Post not found');
+ if(S.people.size<5)await fetchSuggestions();
+ showModal('share-post',{postId:id});
+}
+async function copyShareLink(id){
+ const url=`${location.origin}${location.pathname}?post=${encodeURIComponent(id)}`;
+ try{await navigator.clipboard.writeText(url);toast('Post link copied');}
+ catch{window.prompt('Copy this link:',url);}
+}
+async function shareToUser(postId,friendId){
+ if(!S.posts.has(postId))throw Error('Reel or post is not available');
+ await newChat(friendId);
+ await sendMessage('',null,postId);
+ toast('Shared in your chat');
+}
+async function unsendMessage(id){
+ const m=S.messages.find(x=>x.id===id);
+ if(!m||m.sender_id!==uid())throw Error('You can only unsend your own messages');
+ if(!confirm('Unsend this message for both people?'))return;
+ const {error}=await db.from('messages').delete().eq('id',id).eq('sender_id',uid());if(error)throw error;
+ if(m.media_path)await db.storage.from('media').remove([m.media_path]);
+ await fetchMessages(S.activeChat);render();toast('Message unsent');
+}
+async function openSharedPost(id){
+ if(!S.posts.has(id))throw Error('This post is unavailable or private');
+ await openComments(id);
+}
+async function openUsername(username){
+ const p=[...S.people.values()].find(p=>p.username?.toLowerCase()===username.toLowerCase());
+ if(p){await showProfile(p.id);return;}
+ const {data,error}=await db.from('profiles').select('id').eq('username',username.toLowerCase()).maybeSingle();
+ if(error)throw error;if(!data)throw Error('Account not found');await showProfile(data.id);
+}
+async function switchAccount(){
+ if(!confirm('Switch account? You will sign in to your other account.'))return;
+ await signOut();S.authMode='login';renderAuth();toast('Choose an account and sign in');
 }
 async function readAllNotifications() {
   const {error}=await db.from('notifications').update({is_read:true}).eq('user_id',uid()).eq('is_read',false);
@@ -772,8 +843,8 @@ function renderAuth() {
   const signup=S.authMode==='signup';
   app.innerHTML=`<main class="auth-layout"><section class="auth-showcase"><div class="auth-logo"><span class="brand-emblem">v.</span> vibra<span class="brand-dot">.</span></div><div class="showcase-content"><span class="showcase-tag">✦ A LITTLE MORE CONNECTED</span><h1>Life is better<br>when we <em>share it.</em></h1><p>A home for your favorite moments, the people you love, and everything in between.</p><div class="showcase-collage"><div class="collage-tall"><span>Collect moments.<br>Not things.</span></div><div class="collage-small one">${I('heart',36)}</div><div class="collage-small two">${I('sparkles',33)}</div></div></div><div class="showcase-footer">A place to be you. © ${new Date().getFullYear()} Vibra</div></section>
     <section class="auth-main"><div class="auth-card"><div class="auth-mobile-brand"><span class="brand-emblem">v.</span> vibra<span class="brand-dot">.</span></div><span class="eyebrow">WELCOME TO VIBRA</span><h2>${signup?'Create your account':'Good to have you back.'}</h2><p class="auth-subtitle">${signup?'Join a community made for the moments that matter.':'Your people and your favorite moments are waiting.'}</p><div class="auth-tabs"><button data-action="auth-mode" data-mode="login" class="${!signup?'selected':''}">Log in</button><button data-action="auth-mode" data-mode="signup" class="${signup?'selected':''}">Sign up</button></div>
-    <form data-form="auth">${signup?`<label>Display name<input name="display_name" maxlength="80" required placeholder="Your name" autocomplete="name" /></label><label>Username<input name="username" maxlength="24" pattern="[a-zA-Z0-9_]{3,24}" required placeholder="your_username" autocomplete="username" /></label>`:''}<label>Email<input name="email" type="email" required autocomplete="email" placeholder="you@example.com" /></label><label>Password<input name="password" type="password" minlength="8" required autocomplete="${signup?'new-password':'current-password'}" placeholder="At least 8 characters" /></label>${!signup?`<button type="button" class="forgot" data-action="forgot-password">Forgot password?</button>`:''}<button class="primary-btn btn-full auth-submit" type="submit">${signup?'Create account':'Log in'} ${I('arrow-right',18)}</button></form>
-    <div class="auth-divider"><span>or continue with</span></div><button class="google-btn" data-action="google-auth"><strong class="google-g">G</strong> Google</button><div class="auth-install">${installButton('outline-btn auth-install-btn')}</div><p class="auth-disclaimer">By continuing, you agree to use this social space respectfully. ${signup?'Check your email to confirm your account if verification is enabled.':''}</p></div></section></main>`;
+    <form data-form="auth">${signup?`<label>Display name<input name="display_name" maxlength="80" required placeholder="Your name" autocomplete="name" /></label><label>Username<input name="username" maxlength="24" pattern="[a-zA-Z0-9_]{3,24}" required placeholder="your_username" autocomplete="username" /></label>`:''}<label>Email<input name="email" type="email" required autocomplete="email" placeholder="you@example.com" value="${a(S.loginEmail||'')}" /></label><label>Password<input name="password" type="password" minlength="8" required autocomplete="${signup?'new-password':'current-password'}" placeholder="At least 8 characters" /></label>${!signup?`<button type="button" class="forgot" data-action="forgot-password">Forgot password?</button>`:''}<button class="primary-btn btn-full auth-submit" type="submit">${signup?'Create account':'Log in'} ${I('arrow-right',18)}</button></form>
+    <div class="recent-accounts">${!signup&&recentAccounts().length?`<small>RECENT ACCOUNTS</small><div>${recentAccounts().map(email=>`<button type="button" data-action="choose-account" data-email="${a(email)}">${I('circle-user-round',16)} ${h(email)}</button>`).join('')}</div>`:''}</div><div class="auth-divider"><span>or continue with</span></div><button class="google-btn" data-action="google-auth"><strong class="google-g">G</strong> Google</button><div class="auth-install">${installButton('outline-btn auth-install-btn')}</div><p class="auth-disclaimer">By continuing, you agree to use this social space respectfully. ${signup?'Check your email to confirm your account if verification is enabled.':''}</p></div></section></main>`;
   icons();
 }
 let currentBoot = null, bootUserId = null;
@@ -783,7 +854,7 @@ async function bootstrapUser(user) {
   if(currentBoot && bootUserId===user.id)return currentBoot;
   bootUserId=user.id;
   currentBoot=(async()=>{
-    S.user=user;S.me=null;S.people.clear();S.posts.clear();S.feed=[];S.explore=[];S.reels=[];S.stories=[];
+    S.user=user;rememberAccount(user.email);S.me=null;S.people.clear();S.posts.clear();S.feed=[];S.explore=[];S.reels=[];S.stories=[];
     S.view='home';S.viewUser=null;S.storyStats.clear();S.postSeen.clear();S.activeChat=null;render();
     try {
       await fetchMe();
@@ -804,6 +875,7 @@ function subscribeGlobal() {
       try{await fetchNotifications();if(S.user)render();}catch(e){console.warn(e);}
     })
     .on('postgres_changes',{event:'*',schema:'public',table:'follows',filter:`following_id=eq.${uid()}`},async()=>{
+      await fetchMe().catch(()=>{});
       if(S.view==='profile')await loadProfileView(S.viewUser||uid()).catch(()=>{});
       if(S.user)render();
     })
@@ -812,14 +884,17 @@ function subscribeGlobal() {
     })
     .on('postgres_changes',{event:'*',schema:'public',table:'conversations',filter:`created_by=eq.${uid()}`},async()=>{
       if(S.view==='messages'){try{await fetchConversations();render();}catch(e){console.warn(e);}}
+    })
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},async()=>{
+      if(S.view==='messages'){try{await fetchConversations();render();}catch(e){console.warn(e);}}
     }).subscribe();
 }
 async function signOut() {
   closeModal();
   if(S.channel)await db.removeChannel(S.channel);
   if(S.chatChannel)await db.removeChannel(S.chatChannel);
-  const {error}=await db.auth.signOut();if(error)throw error;
-  S.user=null;S.me=null;S.channel=null;S.chatChannel=null;S.people.clear();S.posts.clear();S.signed.clear();render();
+  const {error}=await db.auth.signOut({scope:'local'});if(error)throw error;
+  S.user=null;S.me=null;S.channel=null;S.chatChannel=null;S.people.clear();S.posts.clear();S.conversations=[];S.messages=[];S.chatSummaries.clear();S.activeChat=null;S.following.clear();S.blocked.clear();S.saved.clear();S.storyStats.clear();S.postSeen.clear();S.signed.clear();render();
 }
 
 // ────────── Input events ──────────
@@ -855,6 +930,14 @@ document.addEventListener('click', async e=>{
       case 'blocked-list':showModal('blocked');break;
       case 'change-password':showModal('password');break;
       case 'logout':await signOut();break;
+      case 'switch-account':await switchAccount();break;
+      case 'choose-account':S.loginEmail=btn.dataset.email;renderAuth();document.querySelector('.auth-card input[name=password]')?.focus();break;
+      case 'share-to-user':await shareToUser(btn.dataset.post,id);break;
+      case 'copy-share-link':await copyShareLink(id);break;
+      case 'unsend-message':await unsendMessage(id);break;
+      case 'open-shared-post':await openSharedPost(id);break;
+      case 'profile-username':await openUsername(btn.dataset.username);break;
+      case 'pick-mention':{const box=btn.closest('.mention-root'),input=box?.querySelector('[data-mention-input]');if(input){const before=input.value.slice(0,input.selectionStart),after=input.value.slice(input.selectionStart),m=before.match(/(^|\s)@([a-z0-9_]{0,24})$/i);if(m){const newBefore=before.slice(0,before.length-m[2].length-1)+ '@'+btn.dataset.username+' ';input.value=newBefore+after;input.focus();input.setSelectionRange(newBefore.length,newBefore.length);box.querySelector('.mention-choices').hidden=true;}}break;}
       case 'profile-options':showModal('profile-options',{userId:id});break;
       case 'block':await blockUser(id);break;
       case 'unblock':await unblockUser(id);break;
@@ -872,7 +955,7 @@ document.addEventListener('click', async e=>{
       case 'delete-post':await removePost(id);break;
       case 'share':await sharePost(id);break;
       case 'slide':{const p=S.posts.get(id);if(p){p.slide=Math.min(p.media.length-1,Math.max(0,(p.slide||0)+Number(btn.dataset.dir)));render();}break;}
-      case 'reply':{if(S.modal?.type==='comments'){S.modal.replyTo={id,username:btn.dataset.username};refreshModal();document.querySelector('.detail-reply input[name=body]')?.focus();}break;}
+      case 'reply':{if(S.modal?.type==='comments'){S.modal.replyTo={id,username:btn.dataset.username};refreshModal();const input=document.querySelector('.detail-reply input[name=body]');if(input){input.value=`@${btn.dataset.username} `;input.focus();}}break;}
       case 'delete-comment':await deleteComment(id);break;
       case 'view-story':await openStory(id);break;
       case 'story-like':await toggleStoryLike(id);break;
@@ -910,7 +993,7 @@ document.addEventListener('submit',async e=>{
         if(!data.session){toast('Check your email to confirm your account');S.authMode='login';render();}
         else await bootstrapUser(data.user);
       } else {
-        const {data,error}=await db.auth.signInWithPassword({email,password});if(error)throw error;
+        const {data,error}=await db.auth.signInWithPassword({email,password});if(error)throw error;rememberAccount(email);
         await bootstrapUser(data.user);
       }
     }
@@ -929,6 +1012,19 @@ document.addEventListener('submit',async e=>{
 
 let searchTimer=null,searchId=0;
 document.addEventListener('input', e=>{
+  if(e.target.matches('[data-mention-input]'))mentionPicker(e.target);
+  if(e.target.id==='share-search'){
+    const term=e.target.value.trim().toLowerCase();const modal=S.modal;
+    if(modal?.type==='share-post'){
+      const matches=[...S.people.values()].filter(p=>p.id!==uid()&&!S.blocked.has(p.id)&&(p.username?.toLowerCase().includes(term)||p.display_name?.toLowerCase().includes(term))).slice(0,35);
+      const host=document.getElementById('share-targets');if(host){host.innerHTML=shareTargetMarkup(matches,modal.postId);icons();hydrateMedia(host);}
+      clearTimeout(searchTimer);if(term.length>=2){searchTimer=setTimeout(async()=>{try{
+        const result=check(await db.from('profiles').select('*').ilike('username',`%${escapeFilter(term)}%`).limit(30));
+        if(S.modal?.type==='share-post' && document.getElementById('share-search')?.value.trim().toLowerCase()===term){result.forEach(p=>S.people.set(p.id,p));const candidates=[...S.people.values()].filter(p=>p.id!==uid()&&!S.blocked.has(p.id)&&p.username?.toLowerCase().includes(term)).slice(0,35);const box=document.getElementById('share-targets');if(box){box.innerHTML=shareTargetMarkup(candidates,S.modal.postId);icons();hydrateMedia(box);}}
+      }catch(err){console.warn(err);}},280);}
+    }return;
+  }
+
   if(e.target.id==='searchbox'){
     const q=e.target.value;S.searchText=q;clearTimeout(searchTimer);const t=++searchId;
     searchTimer=setTimeout(async()=>{

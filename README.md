@@ -1,108 +1,48 @@
-# Vibra 2.0 — Instagram-style social web app
+# Vibra Social v3 — messaging, sharing, mentions and verification
 
-A mobile-responsive HTML/CSS/JavaScript web app using **Supabase Auth, PostgreSQL (RLS), private Storage and Realtime**. It is not affiliated with Instagram or Meta. **Github Pages can host the frontend** without a separate Node backend; Supabase handles all persistent data and authentication.
+Responsive Instagram-style social web app, built with **HTML, CSS, vanilla JavaScript, Supabase Auth, PostgreSQL, Storage and Realtime**. This is an independent project, not Instagram or a Meta product.
 
-## v2.1 — Comment and View Insights repair (existing Vibra projects)
+## Upgrade the EXISTING Vibra site (GitHub Pages + Supabase)
 
-The earlier database schema left a self-referencing `comments add` policy active and did not include the `post_views`/`story_likes` tables. These cause errors when posting comments/replies and opening View Insights or story reactions.
+1. **Back up your Supabase database and existing configured `config.js` before upgrading.**
+2. If you use the *same* connected Supabase project named **Vibra** that was updated in this chat, the **v3 SQL database changes are already applied**. Do **not** run the migration again unnecessarily. If you use another project, open Supabase → SQL Editor, paste `supabase-upgrade-v3.sql`, run it, and check for errors. It is written to be repeatable and does not delete accounts/posts/messages.
+3. Replace the website files in your GitHub repository root with the contents of this folder. **Preserve the real Supabase URL and publishable key from your existing `config.js`** (the copy bundled here contains placeholders). Never expose the `service_role` or secret API key.
+4. In GitHub Pages ensure deployment from `main` / `(root)`; your site must run via HTTPS. Close/reopen the installed PWA or hard-refresh your browser after deployment. The service-worker cache key is now `vibra-shell-v3-0`.
+5. Use two accounts in separate browsers or private windows to test message requests, reply auto-approval, mutual followers, reel sharing, comment mentions, profile badges, and account switching.
 
-**On the existing Vibra Supabase project, run `supabase-fix-comments-insights.sql` in SQL Editor** if these errors appear. This patch is safe to rerun, keeps existing users/posts, and enables RLS on the new tables. If you connected the same project to ChatGPT during this repair, the patch may already have been applied—no need to rerun. If updating another Supabase project, run it there.
+## Install a NEW project
 
-Then upload the updated website files to GitHub Pages, **keeping your configured `config.js`**, and hard refresh/close and reopen the installed PWA. Existing view counts cannot be recovered for views that were never recorded. Re-check with two accounts; the tests run on the database were rolled back intentionally.
+1. Create a Supabase project. Run `supabase-schema.sql` in the SQL Editor first (baseline schema). Then run `supabase-upgrade-v3.sql` (v3 additions/changes).
+2. Edit `config.js` with Project URL and **publishable** API key only.
+3. Configure Supabase Auth site and redirect URLs (your GitHub Pages site; optionally `http://localhost:8000/**` for local development). Set up Google OAuth in Supabase and Google Cloud if required.
+4. Host these files on GitHub Pages, Netlify or any static HTTPS host. Locally: `python -m http.server 8000` in this folder, and visit `http://localhost:8000`.
 
-## ⚠️ IMPORTANT: Upgrading from your previous Vibra app
+## v3 features
 
-**Existing Supabase project with the earlier Vibra schema:**
+- **Message request repairs:** New conversations begin as requests unless both users already follow each other with *accepted* follows. On mutual accepted follows, chats are accepted automatically, including pre-existing pending chats. This does **not** bypass private-profile follow approvals.
+- **Reply auto-accept:** A recipient can reply directly to a pending request; the message and transition to accepted status are enforced in the database. The requester can send only one initial message until approved.
+- **Chat improvements:** Latest-message snippets, unread badges, chat sorting by activity, realtime inbox updates, read receipts, own-message unsend and existing image/video attachments.
+- **In-app reels/post sharing:** Use the send/share icon on any reel/post, search a Vibra user, and send a linked preview inside DMs. Post owners' privacy/blocking rules are enforced in Postgres for both participants; a private reel is not sent to an unauthorized viewer. The sender must be allowed to initiate the DM. Copy-link is also available.
+- **Mentions/tagging:** Type `@username` in post captions or comments/replies; matching usernames from loaded profiles appear as suggestions in comment inputs, and typed mentions are clickable links in posts, comments, and messages. This version does not send a separate mention notification.
+- **500-follower custom badge:** An **app-specific blue check** appears beside usernames only while they have at least **500 accepted followers**. A DB trigger recomputes it when follows are added, accepted, removed, or changed. It is not Instagram/Meta verification, official identity verification, or a paid badge. Users cannot edit the server-generated `is_verified` field.
+- **Switch/add account:** Settings → **Switch / add account** signs out locally and shows login with selectable previously used email addresses. You must authenticate again; the app does not store multiple passwords or session tokens for quick switching.
+- The black/white/red theme, Stories, Comments, View Insights, PWA Install, privacy and other v2 features remain.
 
-1. Make a backup in Supabase and review SQL changes.
-2. Open your existing Supabase project's **SQL Editor**. Run **`supabase-upgrade-v2.sql` ONCE**. This fixes comment/reply permissions and adds the new tables, policies, triggers, privacy settings and chat requests. **Do not rerun the original `supabase-schema.sql` on an existing database**; it tries to recreate named policies.
-3. Replace your old GitHub Pages website files with all the updated app files. Keep your **current configured `config.js`** URL/publishable key if it was already working; don't upload the placeholder version over your configured one.
-4. Hard refresh (Ctrl+Shift+R) or close/reopen the installed app, so the v2 service worker replaces the cached files.
-5. Open your site in two different browsers/accounts to verify posts, comments, incoming requests, and story views.
+## Known limitations and safety notes
 
-**New Supabase project:** run the complete **`supabase-schema.sql` once** instead. It includes all the v2 changes. DO NOT run both SQL files for a new project.
+- The user interface is a **feature-rich starter**, not full Instagram parity. Reels sharing depends on the recipient's actual access to the source post. Source reels deleted by their author also remove attached share-only messages.
+- Only accepted follows count toward the custom badge. If a profile changes privacy or blocks a user, a previously shared preview may become inaccessible when reloaded.
+- Direct messages are protected by RLS, not end-to-end encrypted. Never claim end-to-end encryption. For production, add abuse/reporting features, deletion/export workflows, rate limits, monitoring, and load testing.
+- `@username` works as clickable text, not as a user-ID-backed permanent mention; if the username changes, old text can stop resolving. Suggestions are based on profiles loaded in the current UI, and more users can be loaded by Search.
+- Recent account suggestions are email *hints* stored locally in the browser, not sign-in credentials. Re-authentication is required to switch accounts.
+- Message previews load the last 500 messages across up to 120 conversations, and open chats load the newest 200 messages. A larger app should implement cursor pagination and more scalable message summary tables.
+- A browser UI smoke test with sample data succeeded, as did database-transaction tests of request replies, mutual-follow chat approval and shared-post message insertion. Those tests were rolled back. **An end-to-end test on your deployed website using real logins has not been performed.**
 
-## What's new in 2.0
+## Files
 
-| Feature | Behavior |
-| --- | --- |
-| Comment fix | Removes a self-referencing INSERT RLS check that could cause comment/reply permission issues; a secure trigger now validates reply parent IDs |
-| Colors | Black, charcoal, white with red accent; optional light theme in Settings |
-| Post insights | Owner can see unique signed-in viewers, total likes, commenter count, and viewer/liker identities |
-| Story on avatar | Tap the account's existing story-ring profile icon, in the story strip or profile/post header; a separate `+` uploads another story |
-| Story management | Story author can change the caption, replace media, delete story, see viewers and story likers |
-| Story likes | Viewers can like/unlike a story, stored in Supabase |
-| Message requests | New chats from people you don't follow land in **Messages → Requests**. Recipient can accept or decline; requester can send one initial message before approval |
-| Privacy | Private account, who can comment (everyone/followers/off), who can start messages (everyone/followers/nobody), and story audience (everyone allowed by profile privacy / approved followers only) |
-| PWA | **Install app** button in login screen, navigation, mobile header and Settings; installable over HTTPS in supported browsers |
-
-Other existing features remain: email/password & optional Google sign-in, password reset, posts/reels/photos/videos, likes, comments/replies, saved posts, follows/private follow requests, explore/search, chat with media, notifications, blocking, and profiles.
-
-## Connect Supabase
-
-1. Create a project at <https://supabase.com/dashboard/projects>.
-2. In **SQL Editor**, run the correct SQL file according to the instructions above.
-3. Find your **Project URL** and **publishable key** in Supabase → Project Settings → API Keys / Connect.
-4. Edit `config.js` (public browser configuration):
-
-   ```js
-   window.VIBRA_CONFIG = {
-     supabaseUrl: 'https://YOUR_PROJECT_REF.supabase.co',
-     supabasePublishableKey: 'sb_publishable_YOUR_KEY',
-     appName: 'Vibra'
-   };
-   ```
-
-5. Supabase → Authentication → URL Configuration: set your deployed site as the **Site URL**, and include the deployed URL and `http://localhost:8000/**` in Redirect URLs. For Google OAuth also enable the provider with a Google Cloud **Web application** OAuth client and the Supabase callback URL.
-6. **Never commit service_role, Supabase secret keys or Google Client Secret to HTML/JS or a public GitHub repository.** Only the publishable key is safe to include in `config.js`, because database/storage access is restricted using RLS.
-
-## Deploy on GitHub Pages
-
-1. Extract the ZIP. Open the **`vibra-social-updated`** folder and upload its contents to the **root** of your GitHub repository (not the ZIP itself).
-2. Keep your configured `config.js` or edit the placeholder before publishing.
-3. Repository → Settings → Pages → **Deploy from a branch** → `main` → `/(root)` → Save.
-4. Site URL will resemble `https://YOUR-USERNAME.github.io/REPOSITORY/`.
-5. Add that exact URL to Supabase Auth's Site URL / Redirect URLs and test both the login and Google sign-in flow.
-6. Subsequent updates: upload the changed files, let GitHub Pages deploy, and refresh your browsers.
-
-To run locally, in the app folder run `python -m http.server 8000` and visit <http://localhost:8000/>. `file://` is not a supported deployment method.
-
-## Install on mobile
-
-- **Android (Chrome/Edge):** Open the HTTPS website and tap **Install app**. If your browser does not expose the install prompt, use menu → **Install app** or **Add to Home screen**.
-- **iPhone (Safari):** Open the HTTPS website, tap **Share → Add to Home Screen → Add**. The app's Install button explains these manual steps since iOS does not reliably offer the `beforeinstallprompt` event.
-- The PWA (`manifest.webmanifest`, `sw.js`, icon files) installs a home-screen shortcut/standalone website; it is **not** an Android APK or a native iOS application. Online Supabase connectivity is needed for user-generated content.
-
-## Technical and security notes
-
-- The `supabase-upgrade-v2.sql` script uses RLS on **all new public tables** (`post_views`, `story_likes`) and narrows UPDATE permissions on posts/stories/conversations. `conversations` is added to the Realtime publication for request status updates.
-- Analytics are **unique signed-in accounts** (not anonymous visitors or a full analytics solution). Feed impressions are recorded when posts enter view, and post details/reels also record views. These counts start from v2 deployment; historical views are not reconstructed. Viewer/liker lists show up to 150 for posts / 250 for stories; for busy accounts implement pagination and exact story counts.
-- Story audience is a **profile-wide** control applied to all currently active stories; stories expire 24 hours after their original publication even if edited.
-- Message privacy governs **new** conversations. Accepted/previous conversations can remain open until blocked; incoming requests accept/decline are enforced by SQL. Messages are encrypted in transit and access-controlled but **not end-to-end encrypted**.
-- Private media signed links can be shared until their expiry. Supabase Storage file deletion or network interruption can leave orphaned media; production deployments should schedule cleanup.
-- PWA install requires HTTPS (or localhost) and browser support. Platform prompts are not guaranteed; the fallback instructions explain manual installation.
-- This is an extended starter, not full Instagram feature parity: no native push notifications, voice/video calls, live streaming, music licensing, close-friends lists, automated content moderation/reporting, or recommendation ML. Before a public launch add rate-limiting, spam prevention, moderation, abuse reporting, account export/deletion, load testing and full multi-user integration tests.
-
-### Testing after migration
-
-1. Create two accounts. Sign in on separate devices/browsers.
-2. User A posts a photo. User B comments and replies. Verify both comments remain after refresh.
-3. User B likes and views A's post. In A's **Post options → View insights**, verify the unique view and liker.
-4. User A uploads a story and taps their story-ring avatar; User B views and likes it. In A's story viewer, open **views/likes**, then edit caption and delete.
-5. User B (not followed by A) sends one DM. On A's Messages → Requests tab accept/decline; verify a second initial DM cannot be sent before approval.
-6. Update A's privacy controls and confirm B's ability to comment, message, and view stories changes as expected.
-7. Visit GitHub Pages over HTTPS and test **Install app** on Android Chrome or manual Safari home-screen installation.
-
-### Troubleshooting
-
-| Issue | Check |
-| --- | --- |
-| Comment or reply gives an RLS/permission error | Run **`supabase-upgrade-v2.sql` on the exact existing project**; double-check that your deployed `config.js` points to it |
-| Column `status` or `story_audience` does not exist | The v2 SQL upgrade has not run; check Supabase SQL Editor errors |
-| Posts/photos not visible | Confirm Storage private `media` policies, login session, and follow/story audience settings |
-| Message requests missing | Check the Requests tab, privacy controls and Realtime publication settings for `conversations` |
-| Google login does not work | Check Google OAuth Client ID/Secret **in Supabase dashboard only**, callback URI, Site URL / redirect URLs |
-| Install button only shows instructions | Use HTTPS in a supported browser; browsers decide if/when to show the native install prompt |
-| App still looks pink | Clear cached service worker/website data or reload; verify updated `styles.css` and `sw.js` deployed |
-
-Vibra is an independent example social application. Not affiliated with Instagram or Meta.
+- `index.html`, `styles.css`, `app.js` — responsive web UI and functionality
+- `config.js` — public client configuration; replace placeholders or retain configured version
+- `supabase-schema.sql` — baseline for an entirely new database
+- **`supabase-upgrade-v3.sql`** — additive upgrades for existing v2/partially upgraded projects
+- `manifest.webmanifest`, `sw.js`, `assets/` — installable PWA
+- `supabase-upgrade-v2.sql`, `supabase-fix-comments-insights.sql` — historical scripts only; do **not** rerun by default on a database already upgraded in this conversation
