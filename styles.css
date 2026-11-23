@@ -175,3 +175,37 @@ body{background:var(--bg);color:var(--text)}
 @media(max-width:700px){.share-footer{flex-wrap:wrap}.share-footer p{max-width:100%}.dm-shared-thumb{width:78px;min-width:78px;height:100px}.mention-choices{min-width:210px}}
 .thread-item .thread-preview{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px;margin-top:3px;opacity:.8}
 .dm-unread-count{background:#d72234;color:#fff;border-radius:999px;min-width:20px;height:20px;display:grid;place-items:center;font-size:10px;font-weight:800;margin-left:auto}
+
+
+/* Vibra 3.1 — install sheet is independent of Supabase auth and works on mobile */
+.vibra-install-backdrop{position:fixed;inset:0;z-index:100000;display:flex;justify-content:center;align-items:flex-end;padding:14px;background:rgba(0,0,0,.76);backdrop-filter:blur(6px);color:#f7f7f7;font-family:Manrope,system-ui,sans-serif}
+.vibra-install-panel{position:relative;width:min(100%,480px);max-height:min(90dvh,760px);overflow-y:auto;background:#171717;border:1px solid #343434;border-radius:24px;padding:24px 22px 22px;box-shadow:0 28px 70px rgba(0,0,0,.65);text-align:left}
+.vibra-install-close{position:absolute;right:15px;top:13px;display:grid;place-items:center;border:0;background:#303030;color:#fff;width:30px;height:30px;border-radius:50%;font-size:24px;line-height:1;cursor:pointer}
+.vibra-install-app-row{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+.vibra-install-app-row img{border-radius:17px;box-shadow:0 5px 24px #0006;object-fit:contain;background:#090909}
+.vibra-install-app-row>div{display:flex;flex-direction:column;gap:4px}
+.vibra-install-app-row strong{font-size:19px;color:#fff;font-weight:800}
+.vibra-install-app-row span{font-size:11px;color:#a3a3a3}
+.vibra-install-panel h2{margin:0 0 8px;font-size:23px;letter-spacing:-.7px;font-weight:800;color:#fff}
+.vibra-install-panel p{font-size:13px;line-height:1.7;color:#b9b9b9;margin:0 0 14px}
+.vibra-install-steps{padding-left:21px;margin:10px 0 16px;display:flex;flex-direction:column;gap:10px}
+.vibra-install-steps li{font-size:13px;line-height:1.55;color:#f2f2f2;padding-left:3px}
+.vibra-install-steps li::marker{font-weight:800;color:#f0444f}
+.vibra-install-check{font-size:11px;line-height:1.7;color:#aaa;padding:11px 12px;border-radius:12px;border:1px solid #373737;background:#202020;margin:14px 0}
+.vibra-install-actions{display:flex;gap:10px;margin-top:13px}
+.vibra-install-actions button{flex:1;border-radius:11px;padding:13px 9px;cursor:pointer;font-size:12px;font-weight:800;border:1px solid #343434}
+.vibra-install-secondary{background:#262626;color:#eee}
+.vibra-install-primary{background:#d72738;color:#fff;border-color:#d72738!important}
+@media (min-width:650px){.vibra-install-backdrop{align-items:center}}
+@media (max-width:390px){.vibra-install-panel{padding:20px 16px 18px;border-radius:21px}.vibra-install-panel h2{font-size:20px}}
+
+/* Visible mobile install action instead of an unlabelled download icon */
+@media(max-width:700px){
+ .mobile-header{padding-left:12px;padding-right:12px}
+ .mobile-head-actions{gap:5px;align-items:center}
+ .mobile-install-btn{display:inline-flex!important;gap:5px;align-items:center;justify-content:center;
+   width:auto!important;height:34px;padding:0 9px;background:#e12738;color:#fff!important;
+   border:1px solid #e12738;border-radius:9px;font-size:11px;font-weight:800;white-space:nowrap}
+ .mobile-install-btn svg{color:#fff!important;width:16px;height:16px}
+}
+@media(max-width:360px){.mobile-install-btn{padding:0 6px;font-size:10px}}

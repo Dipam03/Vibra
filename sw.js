@@ -1,14 +1,45 @@
-const CACHE = 'vibra-shell-v3-0';
-const SHELL = ['./', './index.html', './styles.css', './app.js', './config.js', './manifest.webmanifest', './assets/icon.svg'];
-self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
-self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
-self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
-  const u = new URL(e.request.url);
-  if (u.origin !== self.location.origin || u.pathname.includes('/api/')) return;
-  e.respondWith(fetch(e.request).then(resp => {
-    const clone = resp.clone();
-    if (resp.ok && (u.pathname.endsWith('.css') || u.pathname.endsWith('.js') || u.pathname.endsWith('.html'))) caches.open(CACHE).then(c => c.put(e.request, clone));
-    return resp;
-  }).catch(() => caches.match(e.request)));
+/* Vibra static app shell, version 3.1. HTTPS or localhost required. */
+const CACHE_NAME = 'vibra-shell-v3-1';
+const APP_SHELL = [
+  './', './index.html', './styles.css', './app.js', './pwa.js', './config.js',
+  './manifest.webmanifest', './assets/icon.svg', './assets/icon-192.png',
+  './assets/icon-512.png', './assets/icon-maskable-512.png', './assets/apple-touch-icon.png'
+];
+self.addEventListener('install', (event) => {
+  event.waitUntil(caches.open(CACHE_NAME)
+    .then(cache => cache.addAll(APP_SHELL))
+    .then(() => self.skipWaiting()));
+});
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then(keys => Promise.all(keys
+      .filter(key => key.startsWith('vibra-shell-') && key !== CACHE_NAME)
+      .map(key => caches.delete(key))))
+      .then(() => self.clients.claim())
+  );
+});
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.includes('/api/') || url.pathname.includes('/auth/')) return;
+  if (event.request.mode === 'navigate') {
+    event.respondWith(fetch(event.request)
+      .then(response => {
+        if (response.ok) {
+          const copy = response.clone();
+          event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.put('./index.html', copy)));
+        }
+        return response;
+      })
+      .catch(async () => (await caches.match('./index.html')) || Response.error()));
+    return;
+  }
+  event.respondWith(fetch(event.request).then(response => {
+    if (response.ok) {
+      const copy = response.clone();
+      event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy)));
+    }
+    return response;
+  }).catch(() => caches.match(event.request)));
 });

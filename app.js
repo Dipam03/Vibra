@@ -164,7 +164,7 @@ function render() {
   if(!S.user) { renderAuth(); return; }
   app.innerHTML=`<div class="app-shell">
     ${sidebar()}
-    <div class="center-panel"><header class="mobile-header"><button class="brand" data-action="nav" data-view="home"><span class="brand-emblem">v.</span>vibra<span class="brand-dot">.</span></button><div class="mobile-head-actions"><button class="icon-btn mobile-install-btn" data-action="install-app" title="Install Vibra">${I('download',21)}</button><button class="icon-btn" data-action="nav" data-view="notifications">${I('heart',23)}${unreadCount()?'<span class="mini-dot"></span>':''}</button><button class="icon-btn" data-action="nav" data-view="messages">${I('send',22)}</button></div></header><div class="screen" id="screen">${screen()}</div></div>
+    <div class="center-panel"><header class="mobile-header"><button class="brand" data-action="nav" data-view="home"><span class="brand-emblem">v.</span>vibra<span class="brand-dot">.</span></button><div class="mobile-head-actions"><button class="icon-btn mobile-install-btn" data-action="install-app" title="Install Vibra">${I('download',17)}<span>Install</span></button><button class="icon-btn" data-action="nav" data-view="notifications">${I('heart',23)}${unreadCount()?'<span class="mini-dot"></span>':''}</button><button class="icon-btn" data-action="nav" data-view="messages">${I('send',22)}</button></div></header><div class="screen" id="screen">${screen()}</div></div>
     ${rightRail()}
     ${mobileNav()}
     <div id="modal-root">${modalMarkup()}</div>
@@ -630,19 +630,11 @@ async function decideRequest(id,status){
   toast(status==='accepted'?'Message request accepted':'Message request declined');render();
 }
 async function installApp(){
-  if(S.installPrompt){
-    const prompt=S.installPrompt;S.installPrompt=null;
-    await prompt.prompt();const choice=await prompt.userChoice;
-    if(choice?.outcome==='accepted')toast('Install started');else toast('You can install Vibra later from Settings');
-    return;
-  }
-  if(window.matchMedia?.('(display-mode: standalone)').matches||S.installed){toast('Vibra is already installed');return;}
-  if(/iPhone|iPad|iPod/.test(navigator.userAgent)){
-    alert('To install Vibra on iPhone: open this website in Safari → tap Share → Add to Home Screen → Add.');
-  }else{
-    alert('To install Vibra: open the website in Chrome or Edge over HTTPS, then use the browser menu → Install app / Add to Home screen.');
-  }
+  // Works even when the app is still loading; install event was captured by pwa.js in <head>.
+  if (window.VibraInstall) return window.VibraInstall.open();
+  alert('Please open Vibra on its HTTPS website in Chrome or Safari to install.');
 }
+
 async function viewFollowList(id,type) {
   const col=type==='followers'?'following_id':'follower_id';
   const rows=check(await db.from('follows').select('follower_id,following_id').eq(col,id).eq('status','accepted').limit(100));
@@ -1074,8 +1066,6 @@ document.addEventListener('keydown',e=>{
   if(e.key==='ArrowLeft'&&S.modal?.type==='story')storyMove(-1);
 });
 
-window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();S.installPrompt=e;});
-window.addEventListener('appinstalled',()=>{S.installed=true;S.installPrompt=null;toast('Vibra installed');});
 // ────────── App initialization ──────────
 async function initialize() {
   paint();
@@ -1092,6 +1082,5 @@ async function initialize() {
     const {data,error}=await db.auth.getSession();if(error)throw error;
     if(data.session?.user)await bootstrapUser(data.session.user);else renderAuth();
   } catch(e){onError(e);renderAuth();}
-  if('serviceWorker' in navigator && location.protocol!=='file:') navigator.serviceWorker.register('./sw.js').catch(()=>{});
 }
 initialize();

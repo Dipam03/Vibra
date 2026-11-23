@@ -1,3 +1,36 @@
+# Vibra Social v3.1 — mobile PWA installation fixed
+
+**This release fixes the install button without changing the Supabase database.** It preserves the v3 messaging, follows, reels, verification and existing UI.
+
+## Upgrade your GitHub Pages website
+
+1. **Keep your existing, working `config.js`** with the Supabase project URL and publishable/anon key. Do not share or upload a service-role or secret key.
+2. Upload **every file and folder** from this ZIP to your GitHub repository's deployment root, replacing older versions. Especially ensure the new `pwa.js`, `sw.js`, `manifest.webmanifest`, `index.html`, `app.js`, `styles.css`, and **all icons inside `assets/`** are published. Do **not** upload only `index.html`.
+3. Set **Settings → Pages → Deploy from branch → main → /(root)** (unless you deploy with a different configured workflow). Wait for GitHub Pages to deploy and open your actual **HTTPS** link, e.g. `https://USERNAME.github.io/REPO/`.
+4. In mobile Chrome, reload the site, press the red **Install** button in the top header, and confirm the browser's install dialog if shown. You can also find **Install Vibra** under Settings or on the login screen. If no native prompt is available, the button now opens clear device-specific instructions and a manifest check instead of appearing to do nothing.
+5. If the old UI remains, fully close older Vibra tabs and clear the site's cache, then reload. If you previously installed Vibra, launch it from the home screen or uninstall the old shortcut and install again if necessary.
+
+### Android
+
+Use **Google Chrome** on a **HTTPS** page, not a `file://` HTML document and preferably not the embedded browser inside WhatsApp, Facebook or Instagram. Tap **Install** and confirm the native install dialog. If Chrome does not consider the PWA eligible for a prompt yet, use **⋮ → Install app / Add to Home screen**. Some browsers only offer a home-screen shortcut, not a standalone app.
+
+### iPhone / iPad
+
+Due to iOS/browser restrictions there is **no way for a website button to silently install an app**. Tap **Install** for a short guide, then in Safari use **Share → Add to Home Screen → Add**. Where available, enable **Open as Web App**. The home-screen icon uses `assets/apple-touch-icon.png` and opens Vibra in standalone mode.
+
+### What changed and how to test
+
+- `pwa.js` starts **before** the Supabase module and authentication; it reliably listens for `beforeinstallprompt` even if login is slow or the CDN import fails.
+- Service worker registration is **independent** of login and runs on HTTPS or localhost, scoped to the current GitHub Pages subpath.
+- Valid manifest with **192px and 512px PNG icons**, separate **maskable** icon, apple-touch icon, relative `start_url` / `scope`, and standalone display.
+- Install button explicitly reacts to all states: native browser prompt, iOS instructions, Android menu fallback, already installed, and insecure URL.
+- On-screen diagnostics check HTTPS, manifest, icon definitions, and service worker state.
+- Existing app design and all Supabase functionality remain unchanged; no SQL migration is necessary if you already have Vibra v3.
+
+**Test status:** JavaScript syntax, manifest/icon validation, and simulated Chromium mobile/desktop button actions passed. A **real Android/iOS installation** and full GitHub Pages deployment were not tested here; browser behavior depends on the user's device, site and install eligibility. Installation always requires user approval where prompted.
+
+---
+
 # Vibra Social v3 — messaging, sharing, mentions and verification
 
 Responsive Instagram-style social web app, built with **HTML, CSS, vanilla JavaScript, Supabase Auth, PostgreSQL, Storage and Realtime**. This is an independent project, not Instagram or a Meta product.
