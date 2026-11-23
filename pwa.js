@@ -1,4 +1,4 @@
-/* Vibra Install v3.4 – runs before Supabase authentication and captures browser prompts. */
+/* Vibra Install v3.5 – runs before Supabase authentication and captures browser prompts. */
 (() => {
   'use strict';
   const SCRIPT = document.currentScript?.src || new URL('pwa.js', location.href).href;
@@ -6,9 +6,9 @@
   const BASE_PATH = BASE.pathname;
   const URLS = {
     home: BASE.href,
-    manifest: new URL('manifest.json?v=3.4', BASE).href,
+    manifest: new URL('manifest.json?v=3.5', BASE).href,
     worker: new URL('sw.js', BASE).href,
-    diagnostics: new URL('install-check.html?v=3.4', BASE).href,
+    diagnostics: new URL('install-check.html?v=3.5', BASE).href,
     icon: new URL('icon-192.png', BASE).href
   };
   let installEvent = null;
@@ -21,10 +21,15 @@
   const inAppBrowser = () => /Instagram|FBAN|FBAV|FB_IAB|WhatsApp|Line\/|MicroMessenger|Snapchat|TikTok/i.test(navigator.userAgent);
   const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
   const secure = () => isSecureContext && (location.protocol === 'https:' || ['localhost','127.0.0.1','[::1]'].includes(location.hostname));
+  // Remember a confirmed install across sessions on the same origin.
+  // If Chromium offers a fresh native prompt later, the marker is cleared (e.g. after uninstall).
+  try { installed=standalone() || localStorage.getItem('vibra-install-confirmed')==='1'; }
+  catch { installed=standalone(); }
+
 
   function status() {
     return {
-      version: '3.4.0', page: location.href, base: BASE_PATH,
+      version: '3.5.0', page: location.href, base: BASE_PATH,
       secure: secure(), standalone: standalone() || installed,
       nativePromptReady: !!installEvent,
       serviceWorkerSupported: 'serviceWorker' in navigator,
@@ -113,8 +118,12 @@
     guide();
   }
   function updateInstallButtons(){
+    const done=standalone()||installed;
+    document.body?.classList.toggle('vibra-installed',done);
     document.querySelectorAll('[data-action="install-app"]').forEach(el=>{
-      el.title=standalone()||installed?'Vibra is installed':installEvent?'Install Vibra now':'Install Vibra (browser instructions)';
+      el.hidden=done;
+      el.setAttribute('aria-hidden',String(done));
+      el.title=done?'Vibra is installed':installEvent?'Install Vibra now':'Install Vibra (browser instructions)';
     });
   }
   async function setupWorker(){
@@ -126,8 +135,8 @@
     } catch(e){lastSwError=String(e?.message||e);console.warn('Vibra PWA worker:',e);}
   }
   // Capture as soon as possible, even when app.js or Supabase fails to load.
-  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEvent=e;updateInstallButtons();});
-  window.addEventListener('appinstalled',()=>{installed=true;installEvent=null;hide();updateInstallButtons();});
+  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEvent=e;installed=false;try{localStorage.removeItem('vibra-install-confirmed');}catch{}updateInstallButtons();});
+  window.addEventListener('appinstalled',()=>{installed=true;installEvent=null;try{localStorage.setItem('vibra-install-confirmed','1');}catch{}hide();updateInstallButtons();});
   document.addEventListener('click',e=>{
     const install=e.target.closest?.('[data-action="install-app"], [data-vibra-install]');
     if(!install) return;
@@ -136,5 +145,10 @@
   window.addEventListener('keydown',e=>{if(e.key==='Escape')hide();});
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>{void setupWorker();updateInstallButtons();},{once:true});
   else {void setupWorker();updateInstallButtons();}
-  window.VibraInstall={open:startInstall,showGuide:guide,check:status,isStandalone:standalone};
+  window.VibraInstall={open:startInstall,showGuide:guide,check:status,isStandalone:standalone,refresh:updateInstallButtons};
+  const displayQuery=matchMedia('(display-mode: standalone)');
+  displayQuery.addEventListener?.('change',updateInstallButtons);
+  // Auth renders replace install buttons; refresh visibility when those nodes are inserted.
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>new MutationObserver(changes=>{if(changes.some(change=>change.addedNodes.length))updateInstallButtons();}).observe(document.getElementById('app')||document.body,{childList:true,subtree:true}),{once:true});
+  else new MutationObserver(changes=>{if(changes.some(change=>change.addedNodes.length))updateInstallButtons();}).observe(document.getElementById('app')||document.body,{childList:true,subtree:true});
 })();

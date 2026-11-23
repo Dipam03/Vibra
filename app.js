@@ -22,7 +22,7 @@ const S = {
   signed: new Map(), feedToken: 0, screenToken: 0, channel: null, chatChannel: null,
   storyPointer: 0, storyItems: [], storyStats: new Map(), storyInsightsOpen:false,
   postObserver:null, postSeen:new Set(), installPrompt:null, installed: window.matchMedia?.('(display-mode: standalone)').matches||false,
-  inboxTab:'chats', reelObserver: null, preview: false, shareSearchResults:[], lastShareId:null, chatSummaries:new Map()
+  inboxTab:'chats', reelObserver: null, reelPausedByUser:new Set(), preview: false, shareSearchResults:[], lastShareId:null, chatSummaries:new Map()
 };
 const ICON_PATHS = {
   'house':'<path d="m3 10 9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22v-8h6v8"/>',
@@ -75,6 +75,8 @@ const ICON_PATHS = {
   'user-x':'<circle cx="9" cy="8" r="4"/><path d="M2 21v-2a7 7 0 0 1 13-4m3-5 5 5m0-5-5 5"/>',
   'clock':'<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
   'x':'<path d="M18 6 6 18M6 6l12 12"/>',
+  'play':'<path d="M8 5v14l11-7Z"/>',
+  'pause':'<path d="M8 5v14M16 5v14"/>',
   'download':'<path d="M12 3v13m-5-5 5 5 5-5M4 19h16"/>',
   'eye':'<path d="M2 12s3.7-7 10-7 10 7 10 7-3.7 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
   'users':'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3.1a4 4 0 0 1 0 7.8M22 21v-2a4 4 0 0 0-3-3.87"/><circle cx="9" cy="7" r="4"/>',
@@ -104,6 +106,7 @@ function mentionPicker(input){
 const getProfile = id => S.people.get(id) || (id === uid() ? S.me : null);
 const dataImg = (path, alt='Photo', cls='') => `<img class="${cls}" data-private-path="${a(path)}" alt="${a(alt)}" loading="lazy" />`;
 const dataVid = (path, cls='', autoplay=false) => `<video class="${cls}" data-private-path="${a(path)}" playsinline loop muted ${autoplay?'data-autoplay="1"':''} controls preload="metadata"></video>`;
+const reelVideo = path => `<video class="reel-vid" data-private-path="${a(path)}" playsinline webkit-playsinline loop preload="metadata" disablepictureinpicture disableremoteplayback></video>`;
 const avatar = (p, size='md', ring=false) => {
   const path = p?.avatar_path;
   const url = path && db ? db.storage.from('avatars').getPublicUrl(path).data.publicUrl : '';
@@ -162,14 +165,14 @@ function render() {
   if(!ready) { renderSetup(); return; }
   if(!db) { renderSdkError(); return; }
   if(!S.user) { renderAuth(); return; }
-  app.innerHTML=`<div class="app-shell">
+  app.innerHTML=`<div class="app-shell view-${S.view}">
     ${sidebar()}
     <div class="center-panel"><header class="mobile-header"><button class="brand" data-action="nav" data-view="home"><span class="brand-emblem">v.</span>vibra<span class="brand-dot">.</span></button><div class="mobile-head-actions"><button class="icon-btn mobile-install-btn" data-action="install-app" title="Install Vibra">${I('download',17)}<span>Install</span></button><button class="icon-btn" data-action="nav" data-view="notifications">${I('heart',23)}${unreadCount()?'<span class="mini-dot"></span>':''}</button><button class="icon-btn" data-action="nav" data-view="messages">${I('send',22)}</button></div></header><div class="screen" id="screen">${screen()}</div></div>
     ${rightRail()}
     ${mobileNav()}
     <div id="modal-root">${modalMarkup()}</div>
   </div>`;
-  icons(); hydrateMedia(app); installPostObserver();
+  icons(); hydrateMedia(app); installPostObserver(); window.VibraInstall?.refresh?.();
 }
 function sidebar() {
   const tabs=[['home','house','Home'],['search','search','Search'],['explore','compass','Explore'],['reels','clapperboard','Reels'],['messages','send','Messages'],['notifications','heart','Notifications'],['create','square-plus','Create'],['profile','circle-user-round','Profile']];
@@ -230,9 +233,9 @@ function exploreMarkup() {
     <div class="explore-grid">${S.explore.length?S.explore.map((p,i)=>{const m=p.media?.[0];return `<button class="explore-item ${i%9===2?'feature':''}" data-action="comments" data-id="${p.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Explore photo','tile-media')):''}<span class="tile-overlay">${I('heart',18)} ${num(p.likeCount||0)} &nbsp; ${I('message-circle',18)} ${num(p.commentCount||0)}</span>${p.is_reel?`<i class="tile-reel">${I('clapperboard',21)}</i>`:''}</button>`}).join(''):emptyState('compass','Nothing to explore yet','The community will come alive when members start sharing.','Create a post','home')}</div></div>`;
 }
 function reelsMarkup() {
-  return `<div class="reels-page"><header class="reels-top"><h1>Reels <span class="reel-star">✦</span></h1><button class="outline-btn" data-action="open-create" data-type="reel">${I('plus',18)} Create reel</button></header><div class="reel-scroll">${S.reels.length?S.reels.map(p=>{
+  return `<div class="reels-page"><header class="reels-top"><button type="button" class="reels-back" data-action="nav" data-view="home" aria-label="Back to home">${I('arrow-left',23)}</button><h1>Reels</h1><button class="reels-create" data-action="open-create" data-type="reel" aria-label="Create a reel">${I('plus',23)}</button></header><div class="reel-scroll">${S.reels.length?S.reels.map(p=>{
     const pers=getProfile(p.user_id)||{}; const media=p.media?.find(m=>m.media_type==='video');
-    return `<div class="reel-item" data-reel-id="${p.id}"><div class="reel-video">${media?dataVid(media.storage_path,'reel-vid',true):''}<div class="reel-shade"></div><div class="reel-info"><button data-action="profile" data-id="${p.user_id}" class="reel-user">${avatar(pers,'sm')}<strong>@${h(pers.username)} ${badge(pers)}</strong></button><p>${captionHtml(p.caption)}</p></div></div><div class="reel-actions"><button data-action="like" data-id="${p.id}" class="${p.liked?'is-liked':''}">${I('heart',27)}<span>${num(p.likeCount||0)}</span></button><button data-action="comments" data-id="${p.id}">${I('message-circle',27)}<span>${num(p.commentCount||0)}</span></button><button data-action="share" data-id="${p.id}">${I('send',27)}</button><button data-action="save" data-id="${p.id}" class="${S.saved.has(p.id)?'is-saved':''}">${I('bookmark',27)}</button></div></div>`}).join(''):emptyState('clapperboard','No reels yet','Be the first to publish a video reel.','Go home','home')}</div></div>`;
+    return `<article class="reel-item" data-reel-id="${p.id}"><div class="reel-video">${media?reelVideo(media.storage_path):''}<div class="reel-shade"></div><button type="button" class="reel-tap-target" data-action="toggle-reel" data-id="${p.id}" aria-label="Play or pause reel"></button><div class="reel-state" aria-hidden="true">${I('play',44)}<small>Tap to play with sound</small></div><div class="reel-info"><button data-action="profile" data-id="${p.user_id}" class="reel-user">${avatar(pers,'sm')}<strong>@${h(pers.username)} ${badge(pers)}</strong></button><p>${captionHtml(p.caption)}</p></div><div class="reel-actions"><button aria-label="Like reel" data-action="like" data-id="${p.id}" class="${p.liked?'is-liked':''}">${I('heart',27)}<span>${num(p.likeCount||0)}</span></button><button aria-label="Comment on reel" data-action="comments" data-id="${p.id}">${I('message-circle',27)}<span>${num(p.commentCount||0)}</span></button><button aria-label="Share reel" data-action="share" data-id="${p.id}">${I('send',27)}</button><button aria-label="Save reel" data-action="save" data-id="${p.id}" class="${S.saved.has(p.id)?'is-saved':''}">${I('bookmark',27)}</button></div></div></article>`}).join(''):emptyState('clapperboard','No reels yet','Be the first to publish a video reel.','Go home','home')}</div></div>`;
 }
 function profileMarkup() {
   const p=S.viewUser ? getProfile(S.viewUser) : S.me;
@@ -282,11 +285,60 @@ function messagesMarkup() {
   }).join(''):`<div class="empty-thread">${I('send',30)}<p>${S.inboxTab==='requests'?'No message requests.':'No chats yet.'}</p>${S.inboxTab==='chats'?'<button class="text-link" data-action="new-chat">Start a conversation</button>':''}</div>`}</div></div>
     <div class="chat-panel">${active?`<div class="chat-header"><button class="back-chat" data-action="close-chat">${I('arrow-left',22)}</button><button class="chat-peer" data-action="profile" data-id="${partner?.id}">${avatar(partner,'sm')}<span><strong>${h(name(partner))} ${badge(partner)}</strong><small>@${h(partner?.username)}</small></span></button></div>${active.status==='pending'?`<div class="request-banner">${active.recipient_id===uid()?`<p>Message request · Reply to ${h(name(partner))} to automatically accept, or use Accept/Decline.</p><div><button class="primary-btn btn-small" data-action="request-decision" data-id="${active.id}" data-status="accepted">Accept</button><button class="outline-btn btn-small" data-action="request-decision" data-id="${active.id}" data-status="declined">Decline</button></div>`:`<p>Request pending · ${h(name(partner))} has not accepted your message yet.</p>`}</div>`:''}<div class="chat-scroll" id="chat-scroll">${S.messages.length?S.messages.map(m=>`<div class="message-row ${m.sender_id===uid()?'mine':'theirs'}"><div class="message-bubble">${m.shared_post_id?sharedMessage(m.shared_post_id):''}${m.media_path?(m.media_type==='video'?dataVid(m.media_path,'chat-media'):dataImg(m.media_path,'Chat attachment','chat-media')):''}${m.body?`<p>${mentionHtml(m.body)}</p>`:''}<small>${niceTime(m.created_at)}${m.sender_id===uid()&&m.read_at?' · Seen':''}</small>${m.sender_id===uid()?`<button type="button" class="dm-unsend" data-action="unsend-message" data-id="${a(m.id)}">Unsend</button>`:''}</div></div>`).join(''):`<div class="chat-welcome">${avatar(partner,'xl')}<h3>${h(name(partner))}</h3><p>Say hello and start a conversation.</p></div>`}</div>${active.status==='accepted'||(active.status==='pending'&&(active.recipient_id===uid()||(active.created_by===uid()&&!S.messages.length)))?`<form class="chat-compose" data-form="message"><label class="chat-attach" title="Attach photo or video">${I('image-plus',22)}<input type="file" id="chat-attachment" accept="image/*,video/mp4,video/webm,video/quicktime" hidden></label><input name="body" placeholder="Message..." autocomplete="off" maxlength="4000" /><button class="send-btn" type="submit">${I('send',19)}</button></form><div class="attachment-caption" id="chat-file-label"></div>`:`<div class="chat-disabled">${active.recipient_id===uid()?'Reply to accept automatically.':'Waiting for request approval.'}</div>`}`:`<div class="no-chat">${I('messages-square',44)}<h2>Your messages</h2><p>Send private photos and messages to your people.</p><button class="primary-btn" data-action="new-chat">${I('send',18)} Send message</button></div>`}</div></div>`;
 }
+function showReelPlaybackState(video, blocked=false) {
+  const card=video?.closest('.reel-item');
+  if(!card)return;
+  card.classList.toggle('reel-paused',video.paused);
+  card.classList.toggle('reel-needs-play',blocked && video.paused);
+  const label=card.querySelector('.reel-state small');
+  if(label) label.textContent=blocked?'Tap to play with sound':'Tap to resume';
+}
+async function tryPlayReel(video) {
+  if(!video||!video.isConnected||S.view!=='reels'||S.modal||!video.src)return;
+  const id=video.closest('[data-reel-id]')?.dataset.reelId;
+  if(S.reelPausedByUser.has(id))return;
+  video.muted=false; // Never silently mute a reel to bypass autoplay restrictions.
+  video.volume=1;
+  try { await video.play(); showReelPlaybackState(video,false); }
+  catch(e){ showReelPlaybackState(video,true); }
+}
+function toggleReel(id){
+  const card=[...document.querySelectorAll('.reel-item')].find(item=>item.dataset.reelId===id);
+  const video=card?.querySelector('video.reel-vid');
+  if(!video)return;
+  if(video.paused){S.reelPausedByUser.delete(id);void tryPlayReel(video);}
+  else{S.reelPausedByUser.add(id);video.pause();showReelPlaybackState(video,false);}
+}
 function installReelObserver() {
-  if(S.reelObserver) S.reelObserver.disconnect();
-  if(S.view!=='reels') return;
-  S.reelObserver=new IntersectionObserver(entries=>{ entries.forEach(e=>{const v=e.target;if(e.isIntersecting && v.src){v.play().catch(()=>{});const reelId=v.closest('[data-reel-id]')?.dataset.reelId;if(reelId)markPostSeen(reelId).catch(console.warn);}else v.pause();}); },{threshold:.7});
-  document.querySelectorAll('.reel-vid').forEach(v=>S.reelObserver.observe(v));
+  if(S.reelObserver)S.reelObserver.disconnect();
+  if(S.view!=='reels')return;
+  if(S.modal){document.querySelectorAll('video.reel-vid').forEach(v=>v.pause());return;}
+  const vids=[...document.querySelectorAll('video.reel-vid')];
+  vids.forEach(video=>{
+    video.muted=false;
+    video.addEventListener('pause',()=>showReelPlaybackState(video,false));
+    video.addEventListener('playing',()=>showReelPlaybackState(video,false));
+    video.addEventListener('loadeddata',()=>{
+      if(video.getBoundingClientRect().top >= -innerHeight*.25 && video.getBoundingClientRect().top < innerHeight*.75) void tryPlayReel(video);
+    });
+    showReelPlaybackState(video,false);
+  });
+  if(!('IntersectionObserver' in window)){
+    if(vids[0])void tryPlayReel(vids[0]);
+    return;
+  }
+  S.reelObserver=new IntersectionObserver(entries=>{
+    for(const entry of entries){
+      const video=entry.target;
+      const id=video.closest('[data-reel-id]')?.dataset.reelId;
+      if(entry.isIntersecting && entry.intersectionRatio>=.7){
+        for(const other of vids)if(other!==video&&!other.paused)other.pause();
+        void tryPlayReel(video);
+        if(id)markPostSeen(id).catch(console.warn);
+      }else if(!video.paused)video.pause();
+    }
+  },{root:document.querySelector('.reel-scroll'),threshold:[0,.7]});
+  vids.forEach(video=>S.reelObserver.observe(video));
 }
 
 // ────────── Modal UI ──────────
@@ -353,7 +405,7 @@ function modalMarkup() {
   if(m.type==='follow-list') return `<div class="modal-backdrop" data-action="close-modal"><div class="dialog small-dialog" role="dialog" aria-modal="true"><div class="dialog-head"><h2>${h(m.label)}</h2>${close}</div><div class="result-list">${m.people?.length?m.people.map(p=>`<button class="result-user" data-action="profile" data-id="${p.id}">${avatar(p)}<span><strong>${h(p.username)}</strong><small>${h(name(p))}</small></span>${I('chevron-right',19)}</button>`).join(''):'<p class="muted">No accounts to show.</p>'}</div></div></div>`;
   return '';
 }
-function showModal(type, rest={}) { S.modal={type,...rest}; refreshModal(); }
+function showModal(type, rest={}) { S.modal={type,...rest}; if(S.view==='reels')document.querySelectorAll('.reel-vid').forEach(v=>v.pause()); refreshModal(); }
 function refreshModal() {
   if(!S.user) return;
   const root=document.getElementById('modal-root');
@@ -482,7 +534,25 @@ async function loadProfileView(id) {
   await hydratePosts(posts.data||[]);
   const p=S.people.get(id); if(p){p.followersCount=followers.count||0;p.followingCount=following.count||0;}
 }
-async function loadScreen(view) {
+function rememberScreenInHistory(view){
+  if(!S.user)return;
+  try {
+    const current=history.state&&typeof history.state==='object'?history.state:{};
+    if(!current.vibraScreen)history.replaceState({...current,vibraScreen:'home'},'',location.href);
+    if(history.state?.vibraScreen===view)return;
+    if(view==='home')history.replaceState({...history.state,vibraScreen:'home'},'',location.href);
+    else if(history.state?.vibraScreen==='home')history.pushState({...history.state,vibraScreen:view},'',location.href);
+    else history.replaceState({...history.state,vibraScreen:view},'',location.href);
+  }catch(e){console.warn('Navigation history unavailable:',e);}
+}
+async function loadScreen(view,{fromHistory=false}={}) {
+  if(!fromHistory)rememberScreenInHistory(view);
+  if(S.view==='reels' && view!=='reels') {
+    document.querySelectorAll('.reel-vid').forEach(video=>video.pause());
+    S.reelObserver?.disconnect();
+    S.reelPausedByUser.clear();
+  }
+  if(view==='reels'&&S.view!=='reels')S.reelPausedByUser.clear();
   const token=++S.screenToken;
   S.view=view; S.modal=null; S.loading=true; render();
   try {
@@ -655,16 +725,28 @@ async function acceptFollow(id) {
   toast('Follow request accepted');
   await fetchNotifications();render();
 }
+function updateReactionDisplay(id){
+  if(S.view!=='reels')return false;
+  const card=[...document.querySelectorAll('.reel-item')].find(item=>item.dataset.reelId===id);
+  if(!card)return false;
+  const p=S.posts.get(id), like=card.querySelector('[data-action="like"]'),save=card.querySelector('[data-action="save"]');
+  like?.classList.toggle('is-liked',!!p?.liked);
+  const count=like?.querySelector('span');if(count)count.textContent=num(p?.likeCount||0);
+  save?.classList.toggle('is-saved',S.saved.has(id));
+  return true;
+}
 async function toggleLike(id) {
   const p=S.posts.get(id);if(!p)return;
-  const prior=p.liked;p.liked=!prior;p.likeCount=Math.max(0,(p.likeCount||0)+(prior?-1:1));render();
+  const prior=p.liked;p.liked=!prior;p.likeCount=Math.max(0,(p.likeCount||0)+(prior?-1:1));
+  if(!updateReactionDisplay(id))render();
   const result=prior?await db.from('likes').delete().eq('post_id',id).eq('user_id',uid()):await db.from('likes').insert({post_id:id,user_id:uid()});
-  if(result.error){p.liked=prior;p.likeCount=Math.max(0,(p.likeCount||0)+(prior?1:-1));render();throw result.error;}
+  if(result.error){p.liked=prior;p.likeCount=Math.max(0,(p.likeCount||0)+(prior?1:-1));if(!updateReactionDisplay(id))render();throw result.error;}
 }
 async function toggleSaved(id) {
-  const old=S.saved.has(id); old?S.saved.delete(id):S.saved.add(id);render();
+  const old=S.saved.has(id);old?S.saved.delete(id):S.saved.add(id);
+  if(!updateReactionDisplay(id))render();
   const res=old?await db.from('saved_posts').delete().eq('post_id',id).eq('user_id',uid()):await db.from('saved_posts').insert({post_id:id,user_id:uid()});
-  if(res.error){old?S.saved.add(id):S.saved.delete(id);render();throw res.error;}
+  if(res.error){old?S.saved.add(id):S.saved.delete(id);if(!updateReactionDisplay(id))render();throw res.error;}
   toast(old?'Removed from saved':'Saved to your collection');
 }
 async function sendComment(postId,body,parent_id=null) {
@@ -908,6 +990,7 @@ document.addEventListener('click', async e=>{
       }
       case 'google-auth': {const {error}=await db.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.href.split('?')[0]}});if(error)throw error;break;}
       case 'nav':await navigate(btn.dataset.view||'home');break;
+      case 'toggle-reel':toggleReel(id);break;
       case 'profile':await showProfile(id);break;
       case 'open-create': S.uploadType=btn.dataset.type||'post';S.previewFiles=[];showModal('create');break;
       case 'upload-type': S.uploadType=btn.dataset.type;S.previewFiles.forEach(x=>URL.revokeObjectURL(x.url));S.previewFiles=[];refreshModal();break;
@@ -1064,6 +1147,16 @@ document.addEventListener('keydown',e=>{
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'&&S.user){e.preventDefault();navigate('search').then(()=>document.getElementById('searchbox')?.focus());}
   if(e.key==='ArrowRight'&&S.modal?.type==='story')storyMove(1);
   if(e.key==='ArrowLeft'&&S.modal?.type==='story')storyMove(-1);
+});
+
+// Android's hardware Back button dispatches popstate for same-document history entries.
+window.addEventListener('popstate',()=>{
+  if(!S.user)return;
+  // A secondary screen always returns to Home; do not reload the whole installed app.
+  if(S.view!=='home'||S.modal){
+    S.viewUser=null; S.activeChat=null;
+    void loadScreen('home',{fromHistory:true});
+  }
 });
 
 // ────────── App initialization ──────────
