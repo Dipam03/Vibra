@@ -299,3 +299,23 @@ body{background:var(--bg);color:var(--text)}
     scroll-padding-bottom:calc(60px + env(safe-area-inset-bottom,0px));
   }
 }
+
+/* v3.7 · Resume a Reel and discover related Reels without losing the bottom bar. */
+.feed-reel-preview{position:relative;width:100%;height:100%;background:#000;overflow:hidden}
+.feed-reel-preview .feed-reel-video{width:100%;height:100%;object-fit:contain;display:block;pointer-events:none}
+.feed-reel-open{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;background:linear-gradient(transparent,#0002,#0005);border:0;color:white;cursor:pointer;font-size:13px;font-weight:800;text-shadow:0 2px 9px #000}
+.feed-reel-open svg{padding:13px;box-sizing:content-box;border:2px solid #fffc;border-radius:50%;background:#0008;fill:#fff8}
+.feed-reel-open:focus-visible{outline:3px solid #ff4051;outline-offset:-5px}
+.app-shell.view-reels .reel-discovery{position:fixed;left:50%;top:calc(74px + env(safe-area-inset-top,0px));transform:translateX(-50%);z-index:27;display:flex;align-items:center;gap:7px;max-width:min(560px,96vw);overflow-x:auto;scrollbar-width:none;white-space:nowrap;padding:0 8px}
+.app-shell.view-reels .reel-discovery::-webkit-scrollbar{display:none}
+.app-shell.view-reels .reel-discovery button{padding:7px 11px;border:1px solid #ffffff50;border-radius:24px;background:#0b0b0b80;backdrop-filter:blur(8px);color:#f1f1f1;font-size:11px;font-weight:750;cursor:pointer}
+.app-shell.view-reels .reel-discovery button.selected{background:#f4f4f4;color:#111;border-color:#fff}
+.app-shell.view-reels .reel-info .reel-related-tags{pointer-events:auto;display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.app-shell.view-reels .reel-related-tags button{background:#10101099;border:1px solid #ffffff50;border-radius:20px;padding:4px 7px;color:white;font-size:11px;cursor:pointer;text-shadow:0 1px 4px #000}
+.app-shell.view-reels .reels-top h1 small{font-size:13px;color:white;font-weight:600;margin-left:4px}
+@media(max-width:700px){
+ .app-shell.view-reels .reel-discovery{top:calc(68px + env(safe-area-inset-top,0px));left:8px;right:8px;transform:none;max-width:none;justify-content:flex-start}
+ .app-shell.view-reels .reel-related-tags{gap:4px}
+ .app-shell.view-reels .reel-related-tags button{font-size:10px}
+ .app-shell.view-reels .reel-info p{max-height:3.1em;overflow:hidden}
+}

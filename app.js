@@ -22,7 +22,10 @@ const S = {
   signed: new Map(), feedToken: 0, screenToken: 0, channel: null, chatChannel: null,
   storyPointer: 0, storyItems: [], storyStats: new Map(), storyInsightsOpen:false,
   postObserver:null, postSeen:new Set(), installPrompt:null, installed: window.matchMedia?.('(display-mode: standalone)').matches||false,
-  inboxTab:'chats', reelObserver: null, reelPausedByUser:new Set(), preview: false, shareSearchResults:[], lastShareId:null, chatSummaries:new Map()
+  inboxTab:'chats', reelObserver: null, reelPausedByUser:new Set(), preview: false, shareSearchResults:[], lastShareId:null, chatSummaries:new Map(),
+  reelActiveId:null, reelStartId:null, reelTag:'', reelOffset:0, reelHasMore:true, reelLoadingMore:false,
+  reelProgress:new Map(), reelInterests:{}, reelUpdatedAt:0, reelTracking:new Set(), reelPersistTimer:0, reelLastLocalSave:0,
+  homeScrollY:0, reelRestoreFromServer:false
 };
 const ICON_PATHS = {
   'house':'<path d="m3 10 9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22v-8h6v8"/>',
@@ -86,6 +89,135 @@ const I = (icon, size=22, cls='') => `<svg class="lucide ${cls}" width="${size}"
 const h = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const a = h;
 const uid = () => S.user?.id;
+
+// Reel playback + hashtag preferences belong to the signed-in account, not a global browser state.
+// Supabase sync keeps the most recent reel/time available across devices; the local cache also
+// works offline. No other users can read another account's watch state (see migration RLS).
+const REEL_PAGE_SIZE=22;
+const reelTagList = caption => [...new Set([...String(caption||'').matchAll(/#([\p{L}\p{N}_]{2,40})/gu)].map(m=>m[1].toLowerCase()))].slice(0,12);
+const normalizedReelTag = tag => String(tag||'').replace(/^#/,'').toLowerCase().match(/^[\p{L}\p{N}_]{2,40}$/u)?.[0]||'';
+function reelStorageKey() { return `vibra-reel-state-v3.7:${uid()||'guest'}`; }
+function readReelState() {
+  S.reelActiveId=null;S.reelStartId=null;S.reelTag='';S.reelProgress=new Map();S.reelInterests={};S.reelUpdatedAt=0;
+  try {
+    const old=JSON.parse(localStorage.getItem(reelStorageKey())||'{}');
+    if(old.id && /^[\da-f-]{36}$/i.test(old.id))S.reelActiveId=old.id;
+    S.reelProgress=new Map(Object.entries(old.progress||{}).filter(([id,t])=>/^[\da-f-]{36}$/i.test(id)&&Number.isFinite(t)&&t>=0).slice(-60));
+    S.reelInterests=Object.fromEntries(Object.entries(old.tags||{}).filter(([tag,n])=>normalizedReelTag(tag)&&Number.isFinite(n)&&n>0).slice(0,60));
+    S.reelUpdatedAt=Number(old.updatedAt)||0;
+  }catch(e){console.warn('Watch history unavailable',e);}
+}
+function storeReelState({remote=false}={}) {
+  if(!uid())return;
+  S.reelUpdatedAt=Date.now();
+  try {localStorage.setItem(reelStorageKey(),JSON.stringify({id:S.reelActiveId,progress:Object.fromEntries([...S.reelProgress].slice(-60)),tags:S.reelInterests,updatedAt:S.reelUpdatedAt}));}
+  catch(e){console.warn('Could not save reel position locally',e);}
+  if(remote && !S.reelPersistTimer){
+    S.reelPersistTimer=setTimeout(()=>{S.reelPersistTimer=0;void syncReelState();},6500);
+  }
+}
+async function loadRemoteReelState() {
+  if(!db||!uid())return;
+  const id=uid();
+  const {data,error}=await db.from('reel_watch_state').select('reel_id,position_seconds,hashtag_preferences,updated_at').eq('user_id',id).maybeSingle();
+  if(error){console.warn('Reel syncing unavailable (run v3.7 SQL for cross-device resume):',error.message);return;}
+  if(!data || id!==uid() || Date.parse(data.updated_at)<=S.reelUpdatedAt)return;
+  if(data.reel_id){S.reelActiveId=data.reel_id;S.reelProgress.set(data.reel_id,Math.max(0,Number(data.position_seconds)||0));}
+  S.reelInterests=data.hashtag_preferences&&typeof data.hashtag_preferences==='object'?data.hashtag_preferences:{};
+  S.reelUpdatedAt=Date.parse(data.updated_at)||0;
+  S.reelRestoreFromServer=true;
+  try{localStorage.setItem(reelStorageKey(),JSON.stringify({id:S.reelActiveId,progress:Object.fromEntries(S.reelProgress),tags:S.reelInterests,updatedAt:S.reelUpdatedAt}));}catch{}
+}
+async function syncReelState(){
+  if(!db||!uid()||!S.reelActiveId)return;
+  const id=uid();
+  const payload={user_id:id,reel_id:S.reelActiveId,position_seconds:Math.max(0,Number(S.reelProgress.get(S.reelActiveId)||0)),hashtag_preferences:S.reelInterests,updated_at:new Date(S.reelUpdatedAt||Date.now()).toISOString()};
+  const {error}=await db.from('reel_watch_state').upsert(payload,{onConflict:'user_id'});
+  if(error)console.warn('Could not sync reel watch state:',error.message);
+}
+function captureReelPlayback({persist=false}={}) {
+  const cards=[...document.querySelectorAll('.app-shell.view-reels .reel-item')];
+  if(!cards.length)return;
+  const center=innerHeight*.5;
+  const card=cards.reduce((best,el)=>Math.abs(el.getBoundingClientRect().top+el.offsetHeight*.5-center)<Math.abs(best.getBoundingClientRect().top+best.offsetHeight*.5-center)?el:best,cards[0]);
+  const id=card?.dataset.reelId;
+  if(!id)return;
+  S.reelActiveId=id;
+  const video=card.querySelector('video.reel-vid');
+  if(video && Number.isFinite(video.currentTime) && video.currentTime>0)S.reelProgress.set(id,video.currentTime);
+  if(persist)storeReelState({remote:true});
+}
+function reelInterest(tag,bonus=1){
+  const key=normalizedReelTag(tag);if(!key)return;
+  S.reelInterests[key]=Math.min(100,Number(S.reelInterests[key]||0)+bonus);
+  // Keep a bounded preference profile, not an unlimited activity log.
+  S.reelInterests=Object.fromEntries(Object.entries(S.reelInterests).sort((a,b)=>b[1]-a[1]).slice(0,40));
+  storeReelState({remote:true});
+}
+function learnFromReel(id,bonus=1){
+  const post=S.posts.get(id);if(!post)return;
+  reelTagList(post.caption).forEach(tag=>{S.reelInterests[tag]=Math.min(100,Number(S.reelInterests[tag]||0)+bonus);});
+  S.reelInterests=Object.fromEntries(Object.entries(S.reelInterests).sort((a,b)=>b[1]-a[1]).slice(0,40));
+  storeReelState({remote:true});
+}
+function reelRelevance(post,anchor){
+  const tags=reelTagList(post.caption),refTags=new Set(reelTagList(anchor?.caption));
+  const similar=tags.filter(tag=>refTags.has(tag)).length;
+  const interest=tags.reduce((sum,tag)=>sum+Math.min(8,Math.sqrt(Number(S.reelInterests[tag]||0))*2),0);
+  const following=S.following.get(post.user_id)==='accepted'?5:0;
+  const sameCreator=anchor&&post.user_id===anchor.user_id?2:0;
+  const likes=post.liked?2:0, saved=S.saved.has(post.id)?3:0;
+  const ageDays=Math.max(0,(Date.now()-new Date(post.created_at).getTime())/86400000);
+  return similar*7+interest+following+sameCreator+likes+saved+2/(1+ageDays/7);
+}
+function orderRecommendedReels(posts,anchorId){
+  const anchor=posts.find(p=>p.id===anchorId)||S.posts.get(anchorId);
+  const distinct=[...new Map(posts.filter(p=>p?.is_reel).map(p=>[p.id,p])).values()];
+  const ordered=distinct.sort((a,b)=>reelRelevance(b,anchor)-reelRelevance(a,anchor)||new Date(b.created_at)-new Date(a.created_at));
+  if(anchor&&ordered.some(p=>p.id===anchor.id))return [ordered.find(p=>p.id===anchor.id),...ordered.filter(p=>p.id!==anchor.id)];
+  return ordered;
+}
+function currentReelTags(){
+  const tags=[...Object.entries(S.reelInterests).sort((a,b)=>b[1]-a[1]).map(([tag])=>tag)];
+  for(const p of S.reels)for(const tag of reelTagList(p.caption))if(!tags.includes(tag))tags.push(tag);
+  return tags.slice(0,4);
+}
+function restoreReelViewport(){
+  if(S.view!=='reels'||S.loading)return;
+  const scroll=document.querySelector('.reel-scroll'),id=S.reelStartId||S.reelActiveId;
+  if(!scroll)return;
+  const cards=[...scroll.querySelectorAll('.reel-item')];
+  const index=Math.max(0,cards.findIndex(el=>el.dataset.reelId===id));
+  // Scroll inside the fullscreen snap container; never scroll the whole page here.
+  scroll.scrollTop=index*scroll.clientHeight;
+  S.reelActiveId=cards[index]?.dataset.reelId||null;
+  S.reelStartId=null;
+  scroll.addEventListener('scroll',()=>{
+    if(S.view!=='reels')return;
+    if(scroll._reelScrollDebounce)clearTimeout(scroll._reelScrollDebounce);
+    scroll._reelScrollDebounce=setTimeout(()=>{
+      captureReelPlayback({persist:true});
+      const current=Math.round(scroll.scrollTop/Math.max(1,scroll.clientHeight));
+      if(current>=scroll.querySelectorAll('.reel-item').length-5)void loadMoreReels();
+    },135);
+  },{passive:true});
+}
+async function openReelFromPost(id){
+  const post=S.posts.get(id);
+  if(!post?.is_reel)throw Error('This item is not a reel');
+  S.reelTag=''; S.reelStartId=id;
+  await loadScreen('reels');
+}
+async function showReelsForHashtag(tag){
+  const clean=normalizedReelTag(tag);
+  if(tag && !clean)return;
+  captureReelPlayback({persist:true});
+  S.reelTag=clean;S.reelStartId=null;
+  // Hashtag views start at the first matching Reel, rather than an unrelated resume item.
+  S.reelActiveId=null;
+  await loadScreen('reels');
+}
+
 const niceTime = d => { const t = new Date(d); const n = Math.max(0,(Date.now()-t.getTime())/1000); return n<60?'now':n<3600?`${Math.floor(n/60)}m`:n<86400?`${Math.floor(n/3600)}h`:n<604800?`${Math.floor(n/86400)}d`:t.toLocaleDateString(undefined,{month:'short',day:'numeric'}); };
 const num = n => n>=1e6?(n/1e6).toFixed(1)+'m':n>=1e3?(n/1e3).toFixed(1)+'k':String(n||0);
 const initials = p => (p?.display_name || p?.username || 'V').slice(0,1).toUpperCase();
@@ -162,6 +294,7 @@ async function hydrateMedia(root=document) {
 }
 function paint() { document.body.classList.toggle('light-theme', S.light); render(); }
 function render() {
+  if(S.view==='reels'&&!S.loading && document.querySelector('.app-shell.view-reels .reel-item'))captureReelPlayback();
   if(!ready) { renderSetup(); return; }
   if(!db) { renderSdkError(); return; }
   if(!S.user) { renderAuth(); return; }
@@ -172,7 +305,7 @@ function render() {
     ${mobileNav()}
     <div id="modal-root">${modalMarkup()}</div>
   </div>`;
-  icons(); hydrateMedia(app); installPostObserver(); window.VibraInstall?.refresh?.();
+  icons();restoreReelViewport();hydrateMedia(app); installPostObserver(); window.VibraInstall?.refresh?.();
 }
 function sidebar() {
   const tabs=[['home','house','Home'],['search','search','Search'],['explore','compass','Explore'],['reels','clapperboard','Reels'],['messages','send','Messages'],['notifications','heart','Notifications'],['create','square-plus','Create'],['profile','circle-user-round','Profile']];
@@ -220,7 +353,7 @@ function postCard(p) {
   const person=getProfile(p.user_id)||{}; const count=p.likeCount||0;
   const media=p.media||[]; const first=media[p.slide||0];
   return `<article class="post-card" data-post-id="${p.id}"><div class="post-head"><div class="post-author">${storyAvatar(person,'sm')}<button type="button" class="post-author-name" data-action="profile" data-id="${p.user_id}"><span><strong>${h(person.username||'member')} ${badge(person)}</strong><small>${h(p.location||'')} ${p.location?' · ':''}${niceTime(p.created_at)} ago</small></span></button></div><button class="icon-btn" data-action="post-options" data-id="${p.id}">${I('ellipsis',23)}</button></div>
-    <div class="post-media">${first?(first.media_type==='video'?dataVid(first.storage_path,'post-main-video'):dataImg(first.storage_path,`Post by ${person.username}`,'post-main-img')):`<div class="post-media-missing">${I('image-off',36)}</div>`}${media.length>1?`<div class="media-pips">${media.map((_,i)=>`<span class="${i===(p.slide||0)?'selected':''}"></span>`).join('')}</div>${p.slide?`<button class="media-prev" data-action="slide" data-id="${p.id}" data-dir="-1">${I('chevron-left',18)}</button>`:''}${(p.slide||0)<media.length-1?`<button class="media-next" data-action="slide" data-id="${p.id}" data-dir="1">${I('chevron-right',18)}</button>`:''}`:''}</div>
+    <div class="post-media">${first?(first.media_type==='video'?(p.is_reel?`<div class="feed-reel-preview">${reelVideo(first.storage_path).replace('class="reel-vid"','class="post-main-video feed-reel-video"')}<button class="feed-reel-open" data-action="open-reel" data-id="${a(p.id)}" aria-label="Watch this reel in Reels">${I('play',28)}<span>Watch Reel</span></button></div>`:dataVid(first.storage_path,'post-main-video')):dataImg(first.storage_path,`Post by ${person.username}`,'post-main-img')):`<div class="post-media-missing">${I('image-off',36)}</div>`}${media.length>1?`<div class="media-pips">${media.map((_,i)=>`<span class="${i===(p.slide||0)?'selected':''}"></span>`).join('')}</div>${p.slide?`<button class="media-prev" data-action="slide" data-id="${p.id}" data-dir="-1">${I('chevron-left',18)}</button>`:''}${(p.slide||0)<media.length-1?`<button class="media-next" data-action="slide" data-id="${p.id}" data-dir="1">${I('chevron-right',18)}</button>`:''}`:''}</div>
     <div class="post-actions"><button title="Like" class="icon-btn ${p.liked?'is-liked':''}" data-action="like" data-id="${p.id}">${I('heart',25)}</button><button title="Comment" class="icon-btn" data-action="comments" data-id="${p.id}">${I('message-circle',24)}</button><button title="Share" class="icon-btn" data-action="share" data-id="${p.id}">${I('send',23)}</button><span class="spacer"></span><button title="Save" class="icon-btn ${S.saved.has(p.id)?'is-saved':''}" data-action="save" data-id="${p.id}">${I('bookmark',25)}</button></div>
     <div class="post-copy"><strong>${num(count)} ${count===1?'like':'likes'}</strong>${p.user_id===uid()?`<button type="button" class="insights-inline" data-action="post-insights" data-id="${p.id}">${I('eye',15)} View insights</button>`:''}<p><button data-action="profile" data-id="${p.user_id}" class="inline-user">${h(person.username||'member')}</button> ${captionHtml(p.caption)}</p><button class="comment-link" data-action="comments" data-id="${p.id}">View comments${p.commentCount?' · '+num(p.commentCount):''}</button></div>
     ${canCommentOn(p.user_id)?`<form class="quick-comment" data-form="comment" data-post-id="${p.id}"><div class="mention-root"><input name="body" data-mention-input="1" placeholder="Add a comment... @friend" maxlength="1000" required aria-label="Add a comment" autocomplete="off"/><div class="mention-choices" hidden></div></div><button type="submit">Post</button></form>`:'<div class="comment-closed">Comments are limited by this account.</div>'}</article>`;
@@ -232,12 +365,19 @@ function emptyState(icon,title,desc,button,view) {
 function exploreMarkup() {
   return `<div class="content-page"><div class="section-heading"><div><p class="eyebrow">FIND YOUR NEXT FAVORITE</p><h1>Explore<span class="brand-dot">.</span></h1><p>Discover the stories everyone's sharing.</p></div><button class="rounded-icon" data-action="nav" data-view="search">${I('search')}</button></div>
     <div class="discover-top">${I('sparkles',20)} <span>Fresh perspectives, new people, infinite inspiration.</span></div>
-    <div class="explore-grid">${S.explore.length?S.explore.map((p,i)=>{const m=p.media?.[0];return `<button class="explore-item ${i%9===2?'feature':''}" data-action="comments" data-id="${p.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Explore photo','tile-media')):''}<span class="tile-overlay">${I('heart',18)} ${num(p.likeCount||0)} &nbsp; ${I('message-circle',18)} ${num(p.commentCount||0)}</span>${p.is_reel?`<i class="tile-reel">${I('clapperboard',21)}</i>`:''}</button>`}).join(''):emptyState('compass','Nothing to explore yet','The community will come alive when members start sharing.','Create a post','home')}</div></div>`;
+    <div class="explore-grid">${S.explore.length?S.explore.map((p,i)=>{const m=p.media?.[0];return `<button class="explore-item ${i%9===2?'feature':''}" data-action="${p.is_reel?'open-reel':'comments'}" data-id="${p.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Explore photo','tile-media')):''}<span class="tile-overlay">${I('heart',18)} ${num(p.likeCount||0)} &nbsp; ${I('message-circle',18)} ${num(p.commentCount||0)}</span>${p.is_reel?`<i class="tile-reel">${I('clapperboard',21)}</i>`:''}</button>`}).join(''):emptyState('compass','Nothing to explore yet','The community will come alive when members start sharing.','Create a post','home')}</div></div>`;
+}
+function reelItemMarkup(p){
+  const pers=getProfile(p.user_id)||{};
+  const media=p.media?.find(m=>m.media_type==='video');
+  const hashtags=reelTagList(p.caption).slice(0,4);
+  return `<article class="reel-item" data-reel-id="${a(p.id)}"><div class="reel-video">${media?reelVideo(media.storage_path):''}<div class="reel-shade"></div><button type="button" class="reel-tap-target" data-action="toggle-reel" data-id="${a(p.id)}" aria-label="Play or pause reel"></button><div class="reel-state" aria-hidden="true">${I('play',44)}<small>Tap to play with sound</small></div><div class="reel-info"><button data-action="profile" data-id="${a(p.user_id)}" class="reel-user">${avatar(pers,'sm')}<strong>@${h(pers.username)} ${badge(pers)}</strong></button><p>${captionHtml(p.caption)}</p>${hashtags.length?`<div class="reel-related-tags">${hashtags.map(tag=>`<button type="button" data-action="reel-tag" data-tag="${a(tag)}">#${h(tag)}</button>`).join('')}</div>`:''}</div><div class="reel-actions"><button aria-label="Like reel" data-action="like" data-id="${a(p.id)}" class="${p.liked?'is-liked':''}">${I('heart',27)}<span>${num(p.likeCount||0)}</span></button><button aria-label="Comment on reel" data-action="comments" data-id="${a(p.id)}">${I('message-circle',27)}<span>${num(p.commentCount||0)}</span></button><button aria-label="Share reel" data-action="share" data-id="${a(p.id)}">${I('send',27)}</button><button aria-label="Save reel" data-action="save" data-id="${a(p.id)}" class="${S.saved.has(p.id)?'is-saved':''}">${I('bookmark',27)}</button></div></div></article>`;
 }
 function reelsMarkup() {
-  return `<div class="reels-page"><header class="reels-top"><button type="button" class="reels-back" data-action="nav" data-view="home" aria-label="Back to home">${I('arrow-left',23)}</button><h1>Reels</h1><button class="reels-create" data-action="open-create" data-type="reel" aria-label="Create a reel">${I('plus',23)}</button></header><div class="reel-scroll">${S.reels.length?S.reels.map(p=>{
-    const pers=getProfile(p.user_id)||{}; const media=p.media?.find(m=>m.media_type==='video');
-    return `<article class="reel-item" data-reel-id="${p.id}"><div class="reel-video">${media?reelVideo(media.storage_path):''}<div class="reel-shade"></div><button type="button" class="reel-tap-target" data-action="toggle-reel" data-id="${p.id}" aria-label="Play or pause reel"></button><div class="reel-state" aria-hidden="true">${I('play',44)}<small>Tap to play with sound</small></div><div class="reel-info"><button data-action="profile" data-id="${p.user_id}" class="reel-user">${avatar(pers,'sm')}<strong>@${h(pers.username)} ${badge(pers)}</strong></button><p>${captionHtml(p.caption)}</p></div><div class="reel-actions"><button aria-label="Like reel" data-action="like" data-id="${p.id}" class="${p.liked?'is-liked':''}">${I('heart',27)}<span>${num(p.likeCount||0)}</span></button><button aria-label="Comment on reel" data-action="comments" data-id="${p.id}">${I('message-circle',27)}<span>${num(p.commentCount||0)}</span></button><button aria-label="Share reel" data-action="share" data-id="${p.id}">${I('send',27)}</button><button aria-label="Save reel" data-action="save" data-id="${p.id}" class="${S.saved.has(p.id)?'is-saved':''}">${I('bookmark',27)}</button></div></div></article>`}).join(''):emptyState('clapperboard','No reels yet','Be the first to publish a video reel.','Go home','home')}</div></div>`;
+  const related=currentReelTags();
+  return `<div class="reels-page"><header class="reels-top"><button type="button" class="reels-back" data-action="nav" data-view="home" aria-label="Back to home">${I('arrow-left',23)}</button><h1>Reels ${S.reelTag?`<small>#${h(S.reelTag)}</small>`:''}</h1><button class="reels-create" data-action="open-create" data-type="reel" aria-label="Create a reel">${I('plus',23)}</button></header>
+  <div class="reel-discovery" aria-label="Explore Reels by hashtag"><button class="${!S.reelTag?'selected':''}" data-action="reel-tag" data-tag="">For you</button>${related.filter(tag=>tag!==S.reelTag).slice(0,3).map(tag=>`<button data-action="reel-tag" data-tag="${a(tag)}">#${h(tag)}</button>`).join('')}${S.reelTag?`<button class="selected" data-action="reel-tag" data-tag="${a(S.reelTag)}">#${h(S.reelTag)}</button>`:''}</div>
+  <div class="reel-scroll" aria-label="Recommended reels feed">${S.reels.length?S.reels.map(reelItemMarkup).join(''):emptyState('clapperboard',S.reelTag?'No matching reels':'No reels yet',S.reelTag?'Try another hashtag or browse For you.':'Be the first to publish a video reel.','Go home','home')}</div></div>`;
 }
 function profileMarkup() {
   const p=S.viewUser ? getProfile(S.viewUser) : S.me;
@@ -250,7 +390,7 @@ function profileMarkup() {
     <div class="profile-info"><div class="profile-avatar">${storyAvatar(p,'xl')}</div><div class="profile-metadata"><div class="profile-title"><div><h1>${h(p.display_name||p.username)} ${p.is_private?I('lock',17):''}</h1><p>@${h(p.username)} ${badge(p)}</p></div><div class="profile-buttons">${own?`<button class="outline-btn" data-action="edit-profile">${I('pencil',17)} Edit profile</button><button class="rounded-icon" data-action="open-settings">${I('settings',21)}</button>`:`<button class="${relation==='accepted'?'outline-btn':'primary-btn'}" data-action="follow" data-id="${p.id}">${I(relation==='accepted'?'user-check':relation==='pending'?'clock':'user-plus',17)} ${relation==='accepted'?'Following':relation==='pending'?'Requested':'Follow'}</button><button class="outline-btn" data-action="dm-user" data-id="${p.id}">${I('send',17)} Message</button><button class="rounded-icon" data-action="profile-options" data-id="${p.id}">${I('ellipsis')}</button>`}</div></div>
       <div class="profile-stats"><span><b>${num(privateLocked?0:posts.length)}</b> posts</span><button data-action="follow-list" data-id="${p.id}" data-type="followers"><b>${num(p.followersCount||0)}</b> followers</button><button data-action="follow-list" data-id="${p.id}" data-type="following"><b>${num(p.followingCount||0)}</b> following</button></div>
       <div class="profile-bio"><p>${h(p.bio||'Sharing little pieces of life ✨')}</p>${p.website?`<a href="${a(safeLink(p.website))}" target="_blank" rel="noopener noreferrer">${I('link',15)} ${h(p.website)}</a>`:''}</div></div></div>
-    ${privateLocked?`<div class="private-profile">${I('lock-keyhole',34)}<h3>This account is private</h3><p>Follow to see photos and videos.</p></div>`:`<div class="profile-tabs"><button class="${S.profileTab==='posts'?'selected':''}" data-action="profile-tab" data-tab="posts">${I('grid-3x3',17)} POSTS</button><button class="${S.profileTab==='reels'?'selected':''}" data-action="profile-tab" data-tab="reels">${I('clapperboard',17)} REELS</button>${own?`<button class="${S.profileTab==='saved'?'selected':''}" data-action="profile-tab" data-tab="saved">${I('bookmark',17)} SAVED</button>`:''}</div><div class="profile-grid">${visible.length?visible.map(post=>{const m=post.media?.[0];return `<button data-action="comments" data-id="${post.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Post photo','tile-media')):''}<span class="tile-overlay">${I('heart',17)} ${num(post.likeCount||0)}</span>${post.is_reel?`<i class="tile-reel">${I('clapperboard',21)}</i>`:''}</button>`}).join(''):`<div class="grid-empty">${I('camera',32)}<h3>No posts to show</h3><p>When moments are shared, they’ll appear here.</p></div>`}</div>`}</div>`;
+    ${privateLocked?`<div class="private-profile">${I('lock-keyhole',34)}<h3>This account is private</h3><p>Follow to see photos and videos.</p></div>`:`<div class="profile-tabs"><button class="${S.profileTab==='posts'?'selected':''}" data-action="profile-tab" data-tab="posts">${I('grid-3x3',17)} POSTS</button><button class="${S.profileTab==='reels'?'selected':''}" data-action="profile-tab" data-tab="reels">${I('clapperboard',17)} REELS</button>${own?`<button class="${S.profileTab==='saved'?'selected':''}" data-action="profile-tab" data-tab="saved">${I('bookmark',17)} SAVED</button>`:''}</div><div class="profile-grid">${visible.length?visible.map(post=>{const m=post.media?.[0];return `<button data-action="${post.is_reel?'open-reel':'comments'}" data-id="${post.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Post photo','tile-media')):''}<span class="tile-overlay">${I('heart',17)} ${num(post.likeCount||0)}</span>${post.is_reel?`<i class="tile-reel">${I('clapperboard',21)}</i>`:''}</button>`}).join(''):`<div class="grid-empty">${I('camera',32)}<h3>No posts to show</h3><p>When moments are shared, they’ll appear here.</p></div>`}</div>`}</div>`;
 }
 function safeLink(s) { try { const u=new URL(s.startsWith('http')?s:`https://${s}`); return ['https:','http:'].includes(u.protocol)?u.href:'#'; } catch { return '#'; } }
 function searchMarkup() {
@@ -260,7 +400,7 @@ function searchMarkup() {
 }
 function searchResultsMarkup() {
   if(!S.searchText.trim()) return `<div class="search-intro">${I('search-check',36)}<h3>What inspires you?</h3><p>Try a username or #hashtag to find moments worth keeping.</p></div>`;
-  return `<h3 class="result-heading">People</h3><div class="result-list">${S.searchResults.map(p=>`<button class="result-user" data-action="profile" data-id="${p.id}">${avatar(p,'lg')}<span><strong>${h(p.username)} ${badge(p)}</strong><small>${h(name(p))}</small></span>${I('chevron-right',19)}</button>`).join('')||'<p class="muted">No matching people.</p>'}</div><h3 class="result-heading">Posts</h3><div class="explore-grid search-grid">${S.searchPosts.map(p=>{const m=p.media?.[0];return `<button class="explore-item" data-action="comments" data-id="${p.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Post photo','tile-media')):''}</button>`}).join('')||'<p class="muted">No matching captions.</p>'}</div>`;
+  return `<h3 class="result-heading">People</h3><div class="result-list">${S.searchResults.map(p=>`<button class="result-user" data-action="profile" data-id="${p.id}">${avatar(p,'lg')}<span><strong>${h(p.username)} ${badge(p)}</strong><small>${h(name(p))}</small></span>${I('chevron-right',19)}</button>`).join('')||'<p class="muted">No matching people.</p>'}</div><h3 class="result-heading">Posts</h3><div class="explore-grid search-grid">${S.searchPosts.map(p=>{const m=p.media?.[0];return `<button class="explore-item" data-action="${p.is_reel?'open-reel':'comments'}" data-id="${p.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Post photo','tile-media')):''}</button>`}).join('')||'<p class="muted">No matching captions.</p>'}</div>`;
 }
 function notificationsMarkup() {
   return `<div class="content-page notifications-page"><div class="section-heading"><div><p class="eyebrow">THE LITTLE THINGS</p><h1>Activity<span class="brand-dot">.</span></h1><p>All the love, all in one place.</p></div><button class="outline-btn" data-action="read-all">${I('check-check',17)} Mark read</button></div>
@@ -315,34 +455,60 @@ function installReelObserver() {
   if(S.reelObserver)S.reelObserver.disconnect();
   if(S.view!=='reels')return;
   if(S.modal){document.querySelectorAll('video.reel-vid').forEach(v=>v.pause());return;}
-  const vids=[...document.querySelectorAll('video.reel-vid')];
-  vids.forEach(video=>{
+  const videos=[...document.querySelectorAll('video.reel-vid')];
+  videos.forEach(video=>{
+    const id=video.closest('[data-reel-id]')?.dataset.reelId;
     video.muted=false;
-    video.addEventListener('pause',()=>showReelPlaybackState(video,false));
-    video.addEventListener('playing',()=>showReelPlaybackState(video,false));
-    video.addEventListener('loadeddata',()=>{
-      if(video.getBoundingClientRect().top >= -innerHeight*.25 && video.getBoundingClientRect().top < innerHeight*.75) void tryPlayReel(video);
-    });
+    if(!video.dataset.reelBound){
+      video.dataset.reelBound='1';
+      video.addEventListener('pause',()=>showReelPlaybackState(video,false));
+      video.addEventListener('playing',()=>showReelPlaybackState(video,false));
+      video.addEventListener('loadedmetadata',()=>{
+        const seconds=Number(S.reelProgress.get(id)||0);
+        if(seconds>0.3 && Number.isFinite(video.duration) && video.duration>0){
+          // Resume the precise playback time, except where the video has ended.
+          video.currentTime=seconds<video.duration-0.3?seconds:0;
+        }
+      });
+      video.addEventListener('timeupdate',()=>{
+        if(id!==S.reelActiveId || !Number.isFinite(video.currentTime))return;
+        S.reelProgress.set(id,video.currentTime);
+        if(video.currentTime>=3 && !S.reelTracking.has(id)){
+          S.reelTracking.add(id);learnFromReel(id,1);
+        }
+        if(Date.now()-S.reelLastLocalSave>3200){S.reelLastLocalSave=Date.now();storeReelState({remote:true});}
+      });
+      video.addEventListener('loadeddata',()=>{
+        const b=video.getBoundingClientRect();
+        if(b.top>=-innerHeight*.25 && b.top<innerHeight*.75)void tryPlayReel(video);
+      });
+    }
     showReelPlaybackState(video,false);
   });
   if(!('IntersectionObserver' in window)){
-    if(vids[0])void tryPlayReel(vids[0]);
+    const active=videos.find(v=>v.closest('[data-reel-id]')?.dataset.reelId===S.reelActiveId)||videos[0];
+    if(active)void tryPlayReel(active);
     return;
   }
   S.reelObserver=new IntersectionObserver(entries=>{
     for(const entry of entries){
       const video=entry.target;
       const id=video.closest('[data-reel-id]')?.dataset.reelId;
-      if(entry.isIntersecting && entry.intersectionRatio>=.7){
-        for(const other of vids)if(other!==video&&!other.paused)other.pause();
+      if(entry.isIntersecting&&entry.intersectionRatio>=.68){
+        if(S.reelActiveId!==id){
+          S.reelActiveId=id;
+          storeReelState({remote:true});
+        }
+        for(const other of videos)if(other!==video&&!other.paused)other.pause();
         void tryPlayReel(video);
         if(id)markPostSeen(id).catch(console.warn);
+        const index=S.reels.findIndex(r=>r.id===id);
+        if(index>=S.reels.length-5)void loadMoreReels();
       }else if(!video.paused)video.pause();
     }
-  },{root:document.querySelector('.reel-scroll'),threshold:[0,.7]});
-  vids.forEach(video=>S.reelObserver.observe(video));
+  },{root:document.querySelector('.reel-scroll'),threshold:[0,.68]});
+  videos.forEach(video=>S.reelObserver.observe(video));
 }
-
 // ────────── Modal UI ──────────
 function peopleInsightMarkup(people, fallback) {
   return `<div class="insights-people">${people.length?people.map(p=>`<button type="button" class="insight-person" data-action="profile" data-id="${a(p.id)}">${avatar(p,'sm')}<span><strong>@${h(p.username)}</strong><small>${h(name(p))}</small></span>${I('chevron-right',16)}</button>`).join(''):`<p class="muted small">${h(fallback)}</p>`}</div>`;
@@ -473,9 +639,43 @@ async function fetchExplore() {
   const rows=check(await db.from('posts').select('*').order('created_at',{ascending:false}).limit(60));
   S.explore=await hydratePosts(rows);
 }
+async function fetchReelPage(offset=0){
+  let query=db.from('posts').select('*').eq('is_reel',true).order('created_at',{ascending:false}).range(offset,offset+REEL_PAGE_SIZE-1);
+  if(S.reelTag)query=query.ilike('caption',`%#${S.reelTag}%`);
+  return check(await query);
+}
 async function fetchReels() {
-  const rows=check(await db.from('posts').select('*').eq('is_reel',true).order('created_at',{ascending:false}).limit(40));
-  S.reels=await hydratePosts(rows);
+  const targetId=S.reelStartId||(!S.reelTag?S.reelActiveId:null);
+  const rows=await fetchReelPage(0);
+  S.reelOffset=rows.length; S.reelHasMore=rows.length===REEL_PAGE_SIZE;
+  // A Home/profile Reel may be older than the first page. Always include that exact post.
+  if(targetId&&!rows.some(p=>p.id===targetId)){
+    const found=check(await db.from('posts').select('*').eq('id',targetId).eq('is_reel',true).limit(1));
+    if(found[0])rows.unshift(found[0]);
+    else if(S.reelStartId===targetId)S.reelStartId=null;
+  }
+  const hydrated=await hydratePosts(rows.filter(p=>!S.reelTag||reelTagList(p.caption).includes(S.reelTag)));
+  S.reels=orderRecommendedReels(hydrated,targetId);
+}
+async function loadMoreReels(){
+  if(S.view!=='reels'||S.loading||S.reelLoadingMore||!S.reelHasMore||!db)return;
+  S.reelLoadingMore=true;
+  const tag=S.reelTag, token=S.screenToken;
+  try{
+    const rows=await fetchReelPage(S.reelOffset);
+    S.reelOffset+=rows.length;
+    if(rows.length<REEL_PAGE_SIZE)S.reelHasMore=false;
+    if(S.view!=='reels'||tag!==S.reelTag||token!==S.screenToken)return;
+    const known=new Set(S.reels.map(r=>r.id));
+    const incoming=rows.filter(p=>!known.has(p.id)&&(!tag||reelTagList(p.caption).includes(tag)));
+    if(!incoming.length)return;
+    const hydrated=await hydratePosts(incoming);
+    const ordered=orderRecommendedReels(hydrated,S.reelActiveId);
+    S.reels.push(...ordered);
+    const holder=document.querySelector('.reel-scroll');
+    if(holder){holder.insertAdjacentHTML('beforeend',ordered.map(reelItemMarkup).join(''));void hydrateMedia(holder);}
+  }catch(e){console.warn('Could not load more suggested reels:',e);}
+  finally{S.reelLoadingMore=false;}
 }
 async function fetchStories() {
   const rows=check(await db.from('stories').select('*').gt('expires_at',new Date().toISOString()).order('created_at',{ascending:false}).limit(100));
@@ -549,12 +749,12 @@ function rememberScreenInHistory(view){
 }
 async function loadScreen(view,{fromHistory=false}={}) {
   if(!fromHistory)rememberScreenInHistory(view);
+  if(S.view==='home' && view!=='home')S.homeScrollY=window.scrollY||0;
   if(S.view==='reels' && view!=='reels') {
+    captureReelPlayback({persist:true});
     document.querySelectorAll('.reel-vid').forEach(video=>video.pause());
     S.reelObserver?.disconnect();
-    S.reelPausedByUser.clear();
   }
-  if(view==='reels'&&S.view!=='reels')S.reelPausedByUser.clear();
   const token=++S.screenToken;
   S.view=view; S.modal=null; S.loading=true; render();
   try {
@@ -566,7 +766,9 @@ async function loadScreen(view,{fromHistory=false}={}) {
     if(view==='notifications') await fetchNotifications();
     if(view==='search') await doSearch(S.searchText);
   } catch(e) {onError(e);}
-  if(token===S.screenToken){S.loading=false;render(); if(view==='messages'&&S.activeChat) scrollChat();}
+  if(token===S.screenToken){S.loading=false;render(); if(view==='messages'&&S.activeChat)scrollChat();
+    if(view==='home'&&S.homeScrollY>0)requestAnimationFrame(()=>window.scrollTo({top:S.homeScrollY,behavior:'instant'}));
+  }
 }
 async function showProfile(id) { closeModal();S.viewUser=id||uid();S.profileTab='posts';await loadScreen('profile'); }
 async function navigate(view) {
@@ -752,12 +954,14 @@ function updateReactionDisplay(id){
 async function toggleLike(id) {
   const p=S.posts.get(id);if(!p)return;
   const prior=p.liked;p.liked=!prior;p.likeCount=Math.max(0,(p.likeCount||0)+(prior?-1:1));
+  if(p.is_reel&&!prior)learnFromReel(id,2);
   if(!updateReactionDisplay(id))render();
   const result=prior?await db.from('likes').delete().eq('post_id',id).eq('user_id',uid()):await db.from('likes').insert({post_id:id,user_id:uid()});
   if(result.error){p.liked=prior;p.likeCount=Math.max(0,(p.likeCount||0)+(prior?1:-1));if(!updateReactionDisplay(id))render();throw result.error;}
 }
 async function toggleSaved(id) {
   const old=S.saved.has(id);old?S.saved.delete(id):S.saved.add(id);
+  if(S.posts.get(id)?.is_reel&&!old)learnFromReel(id,3);
   if(!updateReactionDisplay(id))render();
   const res=old?await db.from('saved_posts').delete().eq('post_id',id).eq('user_id',uid()):await db.from('saved_posts').insert({post_id:id,user_id:uid()});
   if(res.error){old?S.saved.add(id):S.saved.delete(id);if(!updateReactionDisplay(id))render();throw res.error;}
@@ -882,7 +1086,7 @@ async function sharePost(id){
  showModal('share-post',{postId:id});
 }
 async function copyShareLink(id){
- const url=`${location.origin}${location.pathname}?post=${encodeURIComponent(id)}`;
+ const url=`${location.origin}${location.pathname}?${S.posts.get(id)?.is_reel?'reel':'post'}=${encodeURIComponent(id)}`;
  try{await navigator.clipboard.writeText(url);toast('Post link copied');}
  catch{window.prompt('Copy this link:',url);}
 }
@@ -901,8 +1105,9 @@ async function unsendMessage(id){
  await fetchMessages(S.activeChat);render();toast('Message unsent');
 }
 async function openSharedPost(id){
- if(!S.posts.has(id))throw Error('This post is unavailable or private');
- await openComments(id);
+ const post=S.posts.get(id);
+ if(!post)throw Error('This post is unavailable or private');
+ if(post.is_reel)await openReelFromPost(id);else await openComments(id);
 }
 async function openUsername(username){
  const p=[...S.people.values()].find(p=>p.username?.toLowerCase()===username.toLowerCase());
@@ -943,15 +1148,21 @@ async function bootstrapUser(user) {
   bootUserId=user.id;
   currentBoot=(async()=>{
     S.user=user;rememberAccount(user.email);S.me=null;S.people.clear();S.posts.clear();S.feed=[];S.explore=[];S.reels=[];S.stories=[];
-    S.view='home';S.viewUser=null;S.storyStats.clear();S.postSeen.clear();S.activeChat=null;render();
+    S.view='home';S.viewUser=null;S.storyStats.clear();S.postSeen.clear();S.activeChat=null;
+    S.reelPausedByUser.clear();S.reelTracking.clear();readReelState();render();
     try {
       await fetchMe();
       await fetchRelations();
+      await loadRemoteReelState();
       await fetchNotifications();
       subscribeGlobal();
       await loadScreen('home');
-      const q=new URLSearchParams(location.search).get('post');
-      if(q && /^[0-9a-f-]{36}$/i.test(q)) await openComments(q);
+      const params=new URLSearchParams(location.search);
+      const reel=params.get('reel'),q=params.get('post');
+      if(reel&&/^[0-9a-f-]{36}$/i.test(reel)){
+        const r=check(await db.from('posts').select('*').eq('id',reel).eq('is_reel',true).limit(1));
+        if(r[0]){await hydratePosts(r);await openReelFromPost(reel);}
+      }else if(q&&/^[0-9a-f-]{36}$/i.test(q))await openComments(q);
     } catch(e){onError(e);render();}
   })();
   try{return await currentBoot;}finally{currentBoot=null;bootUserId=null;}
@@ -982,6 +1193,8 @@ async function signOut() {
   if(S.channel)await db.removeChannel(S.channel);
   if(S.chatChannel)await db.removeChannel(S.chatChannel);
   const {error}=await db.auth.signOut({scope:'local'});if(error)throw error;
+  if(S.reelPersistTimer){clearTimeout(S.reelPersistTimer);S.reelPersistTimer=0;}
+  S.reelActiveId=null;S.reelStartId=null;S.reelTag='';S.reelProgress.clear();S.reelInterests={};
   S.user=null;S.me=null;S.channel=null;S.chatChannel=null;S.people.clear();S.posts.clear();S.conversations=[];S.messages=[];S.chatSummaries.clear();S.activeChat=null;S.following.clear();S.blocked.clear();S.saved.clear();S.storyStats.clear();S.postSeen.clear();S.signed.clear();render();
 }
 
@@ -1004,6 +1217,8 @@ document.addEventListener('click', async e=>{
       }
       case 'google-auth': {const {error}=await db.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.href.split('?')[0]}});if(error)throw error;break;}
       case 'nav':await navigate(btn.dataset.view||'home');break;
+      case 'open-reel':await openReelFromPost(id);break;
+      case 'reel-tag':await showReelsForHashtag(btn.dataset.tag||'');break;
       case 'toggle-reel':toggleReel(id);break;
       case 'profile':await showProfile(id);break;
       case 'open-create': S.uploadType=btn.dataset.type||'post';S.previewFiles=[];showModal('create');break;
@@ -1053,7 +1268,7 @@ document.addEventListener('click', async e=>{
       case 'delete-story':await deleteStory(id);break;
       case 'story-prev':await storyMove(-1);break;
       case 'story-next':await storyMove(1);break;
-      case 'tag':S.searchText=btn.dataset.tag;await navigate('search');break;
+      case 'tag':if(S.view==='reels')await showReelsForHashtag(btn.dataset.tag||'');else{S.searchText=btn.dataset.tag;await navigate('search');}break;
       case 'read-all':await readAllNotifications();break;
       case 'new-chat':showModal('new-chat');break;
       case 'dm-user':await newChat(id);break;
@@ -1162,6 +1377,18 @@ document.addEventListener('keydown',e=>{
   if(e.key==='ArrowRight'&&S.modal?.type==='story')storyMove(1);
   if(e.key==='ArrowLeft'&&S.modal?.type==='story')storyMove(-1);
 });
+
+document.addEventListener('visibilitychange',()=>{
+ if(document.hidden&&S.view==='reels'){
+  captureReelPlayback({persist:true});
+  document.querySelectorAll('.reel-vid').forEach(v=>v.pause());
+ }else if(!document.hidden&&S.view==='reels'&&!S.modal){
+  const video=[...document.querySelectorAll('.reel-vid')].find(v=>v.closest('[data-reel-id]')?.dataset.reelId===S.reelActiveId);
+  if(video)void tryPlayReel(video);
+ }
+});
+window.addEventListener('pagehide',()=>{if(S.view==='reels')captureReelPlayback({persist:true});});
+window.addEventListener('scroll',()=>{if(S.view==='home'&&!S.loading)S.homeScrollY=window.scrollY||0;},{passive:true});
 
 // Android's hardware Back button dispatches popstate for same-document history entries.
 window.addEventListener('popstate',()=>{
