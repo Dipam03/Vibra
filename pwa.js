@@ -1,4 +1,4 @@
-/* Vibra Install v3.3 – runs before Supabase authentication and captures browser prompts. */
+/* Vibra Install v3.4 – runs before Supabase authentication and captures browser prompts. */
 (() => {
   'use strict';
   const SCRIPT = document.currentScript?.src || new URL('pwa.js', location.href).href;
@@ -6,10 +6,10 @@
   const BASE_PATH = BASE.pathname;
   const URLS = {
     home: BASE.href,
-    manifest: new URL('manifest.json?v=3.3', BASE).href,
+    manifest: new URL('manifest.json?v=3.4', BASE).href,
     worker: new URL('sw.js', BASE).href,
-    diagnostics: new URL('install-check.html?v=3.3', BASE).href,
-    icon: new URL('assets/icon-192.png', BASE).href
+    diagnostics: new URL('install-check.html?v=3.4', BASE).href,
+    icon: new URL('icon-192.png', BASE).href
   };
   let installEvent = null;
   let installed = false;
@@ -24,7 +24,7 @@
 
   function status() {
     return {
-      version: '3.3.0', page: location.href, base: BASE_PATH,
+      version: '3.4.0', page: location.href, base: BASE_PATH,
       secure: secure(), standalone: standalone() || installed,
       nativePromptReady: !!installEvent,
       serviceWorkerSupported: 'serviceWorker' in navigator,
