@@ -220,3 +220,6 @@ do $$ begin
   begin alter publication supabase_realtime add table public.conversations;
   exception when duplicate_object then null; end;
 end $$;
+
+-- Refresh PostgREST after running the upgrade.
+notify pgrst, 'reload schema';

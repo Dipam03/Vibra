@@ -2,6 +2,14 @@
 
 A mobile-responsive HTML/CSS/JavaScript web app using **Supabase Auth, PostgreSQL (RLS), private Storage and Realtime**. It is not affiliated with Instagram or Meta. **Github Pages can host the frontend** without a separate Node backend; Supabase handles all persistent data and authentication.
 
+## v2.1 — Comment and View Insights repair (existing Vibra projects)
+
+The earlier database schema left a self-referencing `comments add` policy active and did not include the `post_views`/`story_likes` tables. These cause errors when posting comments/replies and opening View Insights or story reactions.
+
+**On the existing Vibra Supabase project, run `supabase-fix-comments-insights.sql` in SQL Editor** if these errors appear. This patch is safe to rerun, keeps existing users/posts, and enables RLS on the new tables. If you connected the same project to ChatGPT during this repair, the patch may already have been applied—no need to rerun. If updating another Supabase project, run it there.
+
+Then upload the updated website files to GitHub Pages, **keeping your configured `config.js`**, and hard refresh/close and reopen the installed PWA. Existing view counts cannot be recovered for views that were never recorded. Re-check with two accounts; the tests run on the database were rolled back intentionally.
+
 ## ⚠️ IMPORTANT: Upgrading from your previous Vibra app
 
 **Existing Supabase project with the earlier Vibra schema:**
