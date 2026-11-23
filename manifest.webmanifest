@@ -1,11 +1,11 @@
 {
-  "id": "./",
+  "id": "/Vibra/",
   "name": "Vibra - Social Moments",
   "short_name": "Vibra",
   "description": "Share reels, stories, posts and messages with your people on Vibra.",
   "lang": "en",
-  "start_url": "./",
-  "scope": "./",
+  "start_url": "/Vibra/",
+  "scope": "/Vibra/",
   "display": "standalone",
   "background_color": "#090909",
   "theme_color": "#090909",
@@ -13,19 +13,19 @@
   "prefer_related_applications": false,
   "icons": [
     {
-      "src": "./assets/icon-192.png",
+      "src": "/Vibra/assets/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./assets/icon-512.png",
+      "src": "/Vibra/assets/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./assets/icon-maskable-512.png",
+      "src": "/Vibra/assets/icon-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

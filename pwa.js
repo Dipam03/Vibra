@@ -1,4 +1,4 @@
-/* Vibra PWA v3.1: independent of the Supabase/login module.
+/* Vibra PWA v3.2: independent of the Supabase/login module.
    Loaded synchronously in the page head so beforeinstallprompt is not missed. */
 (() => {
   'use strict';
@@ -39,7 +39,7 @@
       title: 'Install Vibra on iPhone / iPad',
       intro: 'Apple requires the Home Screen install step in the browser; a website cannot start this permission dialog automatically.',
       items: [
-        'Open Vibra in Safari. (On supported iOS versions, the Share menu in other browsers may also work.)',
+        'Open https://dipam03.github.io/Vibra/ in Safari. (On supported iOS versions, the Share menu in other browsers may also work.)',
         'Tap the Share icon (square with upward arrow).',
         'Choose Add to Home Screen.',
         'If shown, enable Open as Web App, then tap Add.'
@@ -49,7 +49,7 @@
       title: 'Install Vibra on Android',
       intro: 'Your browser has not offered its one-tap install prompt yet. You can still use the browser menu to add Vibra.',
       items: [
-        'Open the live HTTPS Vibra link in Google Chrome (not in Instagram/WhatsApp in-app browser).',
+        'Open https://dipam03.github.io/Vibra/ in Google Chrome (not in Instagram/WhatsApp in-app browser).',
         'Tap the three-dot menu (⋮) at the top right.',
         'Tap Install app or Add to Home screen (wording varies by browser).',
         'Confirm Install. If only Create shortcut is available, Chrome is not offering a full app installation yet.'
@@ -75,7 +75,7 @@
       <section class="vibra-install-panel" role="dialog" aria-modal="true" aria-labelledby="vibra-install-title">
         <button class="vibra-install-close" type="button" aria-label="Close install instructions" data-pwa-close>×</button>
         <div class="vibra-install-app-row">
-          <img src="./assets/icon-192.png" alt="Vibra app icon" width="64" height="64" />
+          <img src="/Vibra/assets/icon-192.png" alt="Vibra app icon" width="64" height="64" />
           <div><strong>Vibra</strong><span>Social web app · Black / white / red</span></div>
         </div>
         <h2 id="vibra-install-title">${guide.title}</h2>
@@ -101,7 +101,7 @@
     if (!node) return;
     const checks = [`${secureHost() ? '✓' : '✕'} HTTPS / localhost`];
     try {
-      const response = await fetch(new URL('./manifest.webmanifest', location.href), {cache: 'no-store'});
+      const response = await fetch('/Vibra/manifest.webmanifest', {cache: 'no-store'});
       if (!response.ok) throw Error(`HTTP ${response.status}`);
       const manifest = await response.json();
       checks.push(`${manifest.name && manifest.start_url && manifest.display === 'standalone' ? '✓' : '✕'} Web app manifest`);
@@ -110,6 +110,11 @@
     } catch { checks.push('✕ Manifest not accessible on this website'); }
     checks.push(`${registration || navigator.serviceWorker?.controller ? '✓' : '…'} Service worker`);
     node.textContent = checks.join('  ·  ');
+    const link = document.createElement('a');
+    link.href = '/Vibra/install-check.html';
+    link.textContent = 'Run full installation check';
+    link.style.cssText = 'display:block;margin-top:8px;color:#ef4444;text-decoration:underline;font-weight:700';
+    node.appendChild(link);
   }
   async function open() {
     if (isPrompting) return;
@@ -158,7 +163,7 @@
   }
   function registerServiceWorker() {
     if (!secureHost() || !('serviceWorker' in navigator)) return;
-    navigator.serviceWorker.register('./sw.js', {scope: './', updateViaCache: 'none'})
+    navigator.serviceWorker.register('/Vibra/sw.js', {scope: '/Vibra/', updateViaCache: 'none'})
       .then((reg) => { registration = reg; void reg.update().catch(() => {}); })
       .catch((err) => console.warn('Vibra: service worker registration failed:', err));
   }
@@ -185,6 +190,6 @@
   else registerServiceWorker();
   window.VibraInstall = {open, showGuide, isStandalone, check: () => ({
     secure: secureHost(), standalone: !!isStandalone(), readyToPrompt: !!deferredPrompt,
-    serviceWorker: !!registration, scope: new URL('./', location.href).href
+    serviceWorker: !!registration, scope: new URL('/Vibra/', location.origin).href
   })};
 })();

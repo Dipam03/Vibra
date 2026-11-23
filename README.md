@@ -1,3 +1,7 @@
+# Latest: exact GitHub Pages installation paths
+
+See `README-GITHUB-PAGES.md` for `https://dipam03.github.io/Vibra/` and the diagnostic link.
+
 # Vibra Social v3.1 — mobile PWA installation fixed
 
 **This release fixes the install button without changing the Supabase database.** It preserves the v3 messaging, follows, reels, verification and existing UI.

@@ -1,8 +1,8 @@
-/* Vibra static app shell, version 3.1. HTTPS or localhost required. */
-const CACHE_NAME = 'vibra-shell-v3-1';
+/* Vibra static app shell, version 3.2. HTTPS or localhost required. */
+const CACHE_NAME = 'vibra-shell-v3-2';
 const APP_SHELL = [
   './', './index.html', './styles.css', './app.js', './pwa.js', './config.js',
-  './manifest.webmanifest', './assets/icon.svg', './assets/icon-192.png',
+  './manifest.webmanifest', './install-check.html', './assets/icon.svg', './assets/icon-192.png',
   './assets/icon-512.png', './assets/icon-maskable-512.png', './assets/apple-touch-icon.png'
 ];
 self.addEventListener('install', (event) => {
