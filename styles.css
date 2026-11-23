@@ -224,8 +224,7 @@ body{background:var(--bg);color:var(--text)}
 .app-shell.view-reels{display:block;max-width:none;width:100%;height:100dvh;min-height:0;overflow:hidden;background:#000}
 .app-shell.view-reels .sidebar,
 .app-shell.view-reels .right-rail,
-.app-shell.view-reels .mobile-header,
-.app-shell.view-reels .mobile-bottom{display:none!important}
+.app-shell.view-reels .mobile-header{display:none!important}
 .app-shell.view-reels .center-panel{height:100dvh;border:0;width:100%;min-width:0}
 .app-shell.view-reels .screen{height:100dvh;min-height:0;padding:0!important}
 .app-shell.view-reels .reels-page{padding:0!important;height:100dvh;min-height:0;background:#000}
@@ -260,3 +259,43 @@ body{background:var(--bg);color:var(--text)}
  .app-shell.view-reels .reels-top{padding:15px 13px}
 }
 @media(prefers-reduced-motion:reduce){.app-shell.view-reels .reel-scroll{scroll-behavior:auto}}
+
+/* Vibra v3.6 — persistent bottom navigation while watching immersive Reels */
+@media(max-width:700px){
+  .app-shell.view-reels .mobile-bottom{
+    display:flex!important;position:fixed;bottom:0;left:0;right:0;
+    z-index:45;height:calc(60px + env(safe-area-inset-bottom,0px));
+    padding:0 3px env(safe-area-inset-bottom,0px);
+    background:rgba(7,7,9,.95);border-top:1px solid #ffffff2b;
+    -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+    justify-content:space-around;align-items:center;
+  }
+  .app-shell.view-reels .mobile-bottom button{
+    display:grid;place-items:center;flex:1;min-width:0;width:auto;
+    height:56px;color:#e4e4e4;opacity:1;background:transparent;
+    padding:0;cursor:pointer;
+  }
+  .app-shell.view-reels .mobile-bottom button.active{color:#ff4656}
+  .app-shell.view-reels .mobile-bottom button:focus-visible{
+    outline:2px solid #ff4656;outline-offset:-4px;border-radius:8px;
+  }
+  .app-shell.view-reels .mobile-bottom .avatar{
+    outline:1px solid #ffffff80;outline-offset:2px;
+  }
+  .app-shell.view-reels .mobile-bottom button.active .avatar{
+    outline:2px solid #ff4656;
+  }
+  /* Keep Reel reactions and author text ABOVE the navigation while the video
+     remains full-height behind it; leave safe areas for Android gesture bars. */
+  .app-shell.view-reels .reel-info{
+    bottom:calc(91px + env(safe-area-inset-bottom,0px));
+    left:13px;right:77px;
+  }
+  .app-shell.view-reels .reel-actions{
+    bottom:calc(91px + env(safe-area-inset-bottom,0px));
+    right:10px;
+  }
+  .app-shell.view-reels .reel-scroll{
+    scroll-padding-bottom:calc(60px + env(safe-area-inset-bottom,0px));
+  }
+}

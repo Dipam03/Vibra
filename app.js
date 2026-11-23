@@ -181,7 +181,9 @@ function sidebar() {
     <div class="sidebar-bottom">${installButton('nav-item install-nav')}<button class="nav-item" data-action="open-settings">${I('settings',23)}<span>Settings</span></button><button class="my-side" data-action="nav" data-view="profile">${avatar(S.me)}<span><strong>${h(name(S.me))}</strong><small>@${h(S.me?.username)}</small></span>${I('ellipsis',20)}</button></div></aside>`;
 }
 function mobileNav() {
-  return `<nav class="mobile-bottom">${[['home','house'],['explore','compass'],['create','square-plus'],['reels','clapperboard'],['profile','circle-user-round']].map(([v,ic])=>`<button class="${S.view===v?'active':''}" data-action="${v==='create'?'open-create':'nav'}" data-view="${v}">${v==='profile'?avatar(S.me,'xs'):I(ic,24)}</button>`).join('')}</nav>`;
+  // The same navigation is present on every mobile section, including fullscreen Reels.
+  const items=[['home','house','Home'],['explore','compass','Explore'],['create','square-plus','Create'],['reels','clapperboard','Reels'],['profile','circle-user-round','Profile']];
+  return `<nav class="mobile-bottom" aria-label="Primary navigation">${items.map(([v,ic,label])=>`<button type="button" class="${S.view===v?'active':''}" data-action="${v==='create'?'open-create':'nav'}" data-view="${v}" aria-label="${label}" title="${label}" ${S.view===v?'aria-current="page"':''}>${v==='profile'?avatar(S.me,'xs'):I(ic,24)}</button>`).join('')}</nav>`;
 }
 function rightRail() {
   if(['messages','reels'].includes(S.view)) return `<aside class="right-rail rail-clean"><div class="rail-brand"><span class="gradient-orb"></span><h3>Find your people.</h3><p>Stay close to the moments that matter.</p></div></aside>`;
@@ -569,6 +571,18 @@ async function loadScreen(view,{fromHistory=false}={}) {
 async function showProfile(id) { closeModal();S.viewUser=id||uid();S.profileTab='posts';await loadScreen('profile'); }
 async function navigate(view) {
   if(view==='create'){showModal('create');return;}
+  // There is exactly one Home history entry and, at most, one secondary entry.
+  // Using back() to return Home removes the secondary entry; otherwise Android
+  // Back on Home would revisit an old Reel instead of leaving the installed app.
+  if(view==='home' && S.view!=='home') {
+    if(history.state?.vibraScreen && history.state.vibraScreen!=='home') {
+      history.back(); // popstate renders Home (without adding another entry).
+      return;
+    }
+    S.viewUser=null; S.activeChat=null;
+    await loadScreen('home',{fromHistory:true});
+    return;
+  }
   S.viewUser=null;
   S.activeChat=view==='messages'?S.activeChat:null;
   await loadScreen(view);
