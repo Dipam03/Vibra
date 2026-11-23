@@ -1,31 +1,24 @@
-VIBRA v3.8 — REELS VIEW COUNTS
-======================================
+VIBRA v3.9 — CLEAN HOME + TWO-STEP ANDROID BACK
+====================================================
 Production URL: https://dipam03.github.io/Vibra/
 
-GitHub upload
-1. Extract this archive and upload ALL files at the ROOT of your Vibra GitHub repository.
-2. Keep your existing configured config.js (this ZIP does not contain it).
-3. The supplied supabase-upgrade-v3-8.sql has already been executed on the connected Vibra
-   project (xzbrtvhmfugpesmyshae). Do NOT run it again on that project.
-4. After GitHub Pages redeploys, fully close and reopen the installed Vibra app.
-   If old files remain cached, use /Vibra/install-check.html to repair its cache.
+CHANGELOG
+- Removed the “GOOD TO SEE YOU AGAIN / Home feed ✦” greeting from Home.
+- Feed now begins with Stories, then For You / Following tabs and posts.
+- Scrolling more than 120px down Home creates a temporary one-step Back guard.
+- Android Back on scrolled Home moves to the TOP of the feed.
+- Android Back again from Home at the top exits via the browser/Android PWA.
+- Android Back from Explore/Reels/Profile/Messages goes to Home (top).
+- Visiting another page while scrolled clears the Home scroll guard, so there is no extra Back step.
+- Manually scrolling back to Home top also removes the scroll guard.
 
-Where views show
-- Reel player: compact view badge over the video.
-- Home feed: Reel preview badge and views beside the likes.
-- Profile Reels grid, Explore grid and Search results: views on each Reel thumbnail.
+UPLOAD
+1. Extract this ZIP and upload its contents at the repository ROOT.
+2. Keep your existing configured config.js (not included).
+3. GitHub Pages will redeploy. Fully close/reopen installed Vibra.
+4. If old cache persists, use https://dipam03.github.io/Vibra/install-check.html
+5. No Supabase SQL change is required for this update.
 
-Definition of a view
-A signed-in viewer counts once for a Reel after 2 seconds of real video playback.
-Scrolling past a Reel is not enough. The creator's own plays do not count. Multiple
-rewatches by the same account count once, avoiding accidental inflation. This is a
-UNIQUE-VIEWER count, not Instagram's proprietary replay-based Plays metric.
-
-Views begin tracking when v3.8 is deployed; historic plays cannot be recovered.
-Database triggers maintain public per-Reel totals without exposing viewer identities.
-The viewer table is protected by per-account RLS, with no client permission to edit totals.
-
-Test
-Use two different accounts. From account B watch account A's Reel for at least 2
-seconds, then check the view badge and account A's Profile Reels grid. Reload and
-confirm the number persists. Replay with B and confirm it does not increase again.
+LIMITATIONS
+The exact app-exit behavior of Back is controlled by Android/Chrome after the Home
+history entry is exhausted. In a browser tab, Back may navigate to the previous site.

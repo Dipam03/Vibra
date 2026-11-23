@@ -376,8 +376,8 @@ function screen() {
 }
 function homeMarkup() {
   const feed=S.feed.filter(p=>S.feedMode==='all'||p.user_id===uid()||S.following.get(p.user_id)==='accepted');
-  return `<div class="feed-page"><div class="feed-top"><div><p class="eyebrow">GOOD TO SEE YOU AGAIN</p><h1>Home feed <span class="hello-spark">✦</span></h1></div><button class="feed-create" data-action="open-create">${I('plus',19)} Share a moment</button></div>
-    <div class="feed-layout"><div class="feed-col"><section class="story-card"><div class="story-head"><strong>Stories</strong><span>Moments that last 24 hours</span></div><div class="stories-track"><div class="story-tile own-story"><button type="button" data-action="${hasStory(uid())?'view-story':'open-create'}" data-id="${uid()}" data-type="story" class="story-avatar-hit ${hasStory(uid())?'has-story':''}">${avatar(S.me,'story',hasStory(uid()))}</button><button type="button" class="story-add" data-action="open-create" data-type="story" title="Add story">${I('plus',14)}</button><small>Your story</small></div>${storyProfiles().filter(p=>p.id!==uid()).map(item=>`<button class="story-tile" data-action="view-story" data-id="${item.id}"><span class="story-ring">${avatar(item,'story')}</span><small>${h(item.username)}</small></button>`).join('')}</div></section>
+  // Stories start the Home feed immediately. No greeting banner or decorative star.
+  return `<div class="feed-page"><div class="feed-layout"><div class="feed-col"><section class="story-card"><div class="story-head"><strong>Stories</strong><span>24 hours</span></div><div class="stories-track"><div class="story-tile own-story"><button type="button" data-action="${hasStory(uid())?'view-story':'open-create'}" data-id="${uid()}" data-type="story" class="story-avatar-hit ${hasStory(uid())?'has-story':''}">${avatar(S.me,'story',hasStory(uid()))}</button><button type="button" class="story-add" data-action="open-create" data-type="story" title="Add story">${I('plus',14)}</button><small>Your story</small></div>${storyProfiles().filter(p=>p.id!==uid()).map(item=>`<button class="story-tile" data-action="view-story" data-id="${item.id}"><span class="story-ring">${avatar(item,'story')}</span><small>${h(item.username)}</small></button>`).join('')}</div></section>
       <div class="feed-switch"><button data-action="feed-filter" data-filter="all" class="${S.feedMode==='all'?'on':''}">For you</button><button data-action="feed-filter" data-filter="following" class="${S.feedMode==='following'?'on':''}">Following</button><span class="feed-switch-end">${I('sliders-horizontal',17)}</span></div>
       <section class="post-list">${feed.length?feed.map(postCard).join(''):emptyState('image','Your feed starts here','Share your first post or follow someone to see their moments.','Explore posts','explore')}</section></div></div></div>`;
 }
@@ -784,20 +784,65 @@ async function loadProfileView(id) {
   await hydratePosts(posts.data||[]);
   const p=S.people.get(id); if(p){p.followersCount=followers.count||0;p.followingCount=following.count||0;}
 }
+// Android Back behavior:
+//  1. On Home, scrolling below the header adds ONE temporary history entry.
+//  2. Back removes that entry and brings Home to the very top.
+//  3. Another Back on Home has no app-owned entry left, so the browser/OS may exit.
+// Other sections use one secondary entry. Moving there from a scrolled Home REPLACES
+// its temporary scroll entry so returning Home never needs an extra Back press.
+const HOME_BACK_SCROLL_THRESHOLD = 120;
+let homeScrollHistorySettling = false;
+try { if ('scrollRestoration' in history) history.scrollRestoration = 'manual'; } catch (_) {}
+function scrollHomeToTop(){
+  S.homeScrollY = 0;
+  window.scrollTo({top:0, left:0, behavior:'instant'});
+}
 function rememberScreenInHistory(view){
   if(!S.user)return;
   try {
-    const current=history.state&&typeof history.state==='object'?history.state:{};
-    if(!current.vibraScreen)history.replaceState({...current,vibraScreen:'home'},'',location.href);
-    if(history.state?.vibraScreen===view)return;
-    if(view==='home')history.replaceState({...history.state,vibraScreen:'home'},'',location.href);
-    else if(history.state?.vibraScreen==='home')history.pushState({...history.state,vibraScreen:view},'',location.href);
-    else history.replaceState({...history.state,vibraScreen:view},'',location.href);
+    let current=history.state&&typeof history.state==='object'?history.state:{};
+    if(!current.vibraScreen){
+      history.replaceState({...current,vibraScreen:'home',vibraScrollGuard:false},'',location.href);
+      current=history.state;
+    }
+    if(view==='home'){
+      if(current.vibraScreen!=='home'||current.vibraScrollGuard){
+        history.replaceState({...current,vibraScreen:'home',vibraScrollGuard:false},'',location.href);
+      }
+      return;
+    }
+    if(current.vibraScreen===view && !current.vibraScrollGuard)return;
+    const next={...current,vibraScreen:view,vibraScrollGuard:false};
+    if(current.vibraScreen==='home' && !current.vibraScrollGuard){
+      history.pushState(next,'',location.href);
+    }else{
+      // Reuse the guard slot (or previous secondary slot), preserving one Home entry.
+      history.replaceState(next,'',location.href);
+    }
   }catch(e){console.warn('Navigation history unavailable:',e);}
+}
+function updateHomeScrollHistory(){
+  if(!S.user||S.view!=='home'||S.loading||S.modal||homeScrollHistorySettling)return;
+  const y=window.scrollY||document.documentElement.scrollTop||0;
+  S.homeScrollY=y;
+  try{
+    const current=history.state;
+    if(!current?.vibraScreen){
+      history.replaceState({...(current||{}),vibraScreen:'home',vibraScrollGuard:false},'',location.href);
+    }
+    if(y>HOME_BACK_SCROLL_THRESHOLD && history.state?.vibraScreen==='home' && !history.state?.vibraScrollGuard){
+      history.pushState({...history.state,vibraScreen:'home',vibraScrollGuard:true},'',location.href);
+    }else if(y<=8 && history.state?.vibraScrollGuard){
+      // A swipe up to the top clears the guard as well. Back from top should exit.
+      homeScrollHistorySettling=true;
+      history.back();
+    }
+  }catch(e){console.warn('Home back guard unavailable:',e);}
 }
 async function loadScreen(view,{fromHistory=false}={}) {
   if(!fromHistory)rememberScreenInHistory(view);
-  if(S.view==='home' && view!=='home')S.homeScrollY=window.scrollY||0;
+  const changing=S.view!==view;
+  if(view==='home' && changing)scrollHomeToTop();
   if(S.view==='reels' && view!=='reels') {
     captureReelPlayback({persist:true});
     document.querySelectorAll('.reel-vid').forEach(video=>video.pause());
@@ -805,6 +850,7 @@ async function loadScreen(view,{fromHistory=false}={}) {
   }
   const token=++S.screenToken;
   S.view=view; S.modal=null; S.loading=true; render();
+  if(changing)window.scrollTo({top:0,left:0,behavior:'instant'});
   try {
     if(view==='home') await Promise.all([fetchFeed(),fetchStories(),fetchSuggestions()]);
     if(view==='explore') await fetchExplore();
@@ -814,22 +860,28 @@ async function loadScreen(view,{fromHistory=false}={}) {
     if(view==='notifications') await fetchNotifications();
     if(view==='search') await doSearch(S.searchText);
   } catch(e) {onError(e);}
-  if(token===S.screenToken){S.loading=false;render(); if(view==='messages'&&S.activeChat)scrollChat();
-    if(view==='home'&&S.homeScrollY>0)requestAnimationFrame(()=>window.scrollTo({top:S.homeScrollY,behavior:'instant'}));
+  if(token===S.screenToken){
+    S.loading=false;render();
+    if(view==='messages'&&S.activeChat)scrollChat();
+    if(view==='home' && changing)requestAnimationFrame(scrollHomeToTop);
   }
 }
 async function showProfile(id) { closeModal();S.viewUser=id||uid();S.profileTab='posts';await loadScreen('profile'); }
 async function navigate(view) {
   if(view==='create'){showModal('create');return;}
-  // There is exactly one Home history entry and, at most, one secondary entry.
-  // Using back() to return Home removes the secondary entry; otherwise Android
-  // Back on Home would revisit an old Reel instead of leaving the installed app.
-  if(view==='home' && S.view!=='home') {
-    if(history.state?.vibraScreen && history.state.vibraScreen!=='home') {
-      history.back(); // popstate renders Home (without adding another entry).
+  if(view==='home'){
+    if(S.view==='home'){
+      if(history.state?.vibraScrollGuard){
+        homeScrollHistorySettling=true;
+        history.back();
+      }else scrollHomeToTop();
       return;
     }
-    S.viewUser=null; S.activeChat=null;
+    if(history.state?.vibraScreen && history.state.vibraScreen!=='home'){
+      history.back(); // One popstate returns to the ONLY Home entry.
+      return;
+    }
+    S.viewUser=null;S.activeChat=null;
     await loadScreen('home',{fromHistory:true});
     return;
   }
@@ -1436,16 +1488,28 @@ document.addEventListener('visibilitychange',()=>{
  }
 });
 window.addEventListener('pagehide',()=>{if(S.view==='reels')captureReelPlayback({persist:true});});
-window.addEventListener('scroll',()=>{if(S.view==='home'&&!S.loading)S.homeScrollY=window.scrollY||0;},{passive:true});
+window.addEventListener('scroll',updateHomeScrollHistory,{passive:true});
 
-// Android's hardware Back button dispatches popstate for same-document history entries.
+// Each browser Back consumes just one entry. On scrolled Home, it scrolls to the
+// top; on secondary pages it opens Home. On Home at top the OS owns the next Back.
 window.addEventListener('popstate',()=>{
   if(!S.user)return;
-  // A secondary screen always returns to Home; do not reload the whole installed app.
-  if(S.view!=='home'||S.modal){
-    S.viewUser=null; S.activeChat=null;
-    void loadScreen('home',{fromHistory:true});
+  homeScrollHistorySettling=true;
+  if(S.view==='home'){
+    scrollHomeToTop();
+    requestAnimationFrame(()=>{
+      scrollHomeToTop();
+      homeScrollHistorySettling=false;
+    });
+    return;
   }
+  S.viewUser=null;S.activeChat=null;
+  void loadScreen('home',{fromHistory:true}).finally(()=>{
+    requestAnimationFrame(()=>{
+      scrollHomeToTop();
+      homeScrollHistorySettling=false;
+    });
+  });
 });
 
 // ────────── App initialization ──────────

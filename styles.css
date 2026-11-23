@@ -335,3 +335,12 @@ body{background:var(--bg);color:var(--text)}
  .tile-views{left:5px;bottom:5px;padding:4px;font-size:11px}
  .feed-reel-views{bottom:12px;left:12px}
 }
+
+/* v3.9 — Minimal Home layout: no AI-like sparkle/greeting banner. */
+.feed-page{padding-top:22px}
+.feed-col{width:100%}
+.story-card{background:var(--panel)}
+@media (max-width:700px){
+  .feed-page{padding-top:12px}
+  .story-card{margin-top:0}
+}

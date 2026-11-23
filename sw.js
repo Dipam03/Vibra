@@ -1,5 +1,5 @@
-/* Vibra service worker 3.8 — repo scope /Vibra/; stale installs are replaced. */
-const CACHE='vibra-shell-3-8';
+/* Vibra service worker 3.9 — repo scope /Vibra/; stale installs are replaced. */
+const CACHE='vibra-shell-3-9';
 const PREFIX='vibra-shell-';
 const ROOT=new URL('./',self.location.href);
 const CORE=['./','./index.html','./manifest.json','./pwa.js','./icon-192.png','./icon-512.png'];
