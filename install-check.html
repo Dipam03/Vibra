@@ -1,21 +1,44 @@
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#090909"><link rel="manifest" href="/Vibra/manifest.webmanifest?v=3.2"><link rel="apple-touch-icon" href="/Vibra/assets/apple-touch-icon.png"><title>Vibra · Install Check</title>
-<style>*,*:before,*:after{box-sizing:border-box}body{margin:0;background:#090909;color:#f6f6f6;font:16px system-ui,-apple-system,sans-serif;line-height:1.6}main{max-width:600px;margin:45px auto;padding:28px;border:1px solid #303030;border-radius:20px;background:#161616}h1{margin:0 0 8px;font-size:27px}p{color:#b7b7b7}.ok{color:#72dba7}.bad{color:#ff7979}.warn{color:#ffd166}.check{padding:10px 0;border-bottom:1px solid #303030}button,a.action{padding:13px 18px;background:#e33535;color:white;border:0;border-radius:10px;text-decoration:none;cursor:pointer;font-weight:700;display:inline-block;margin:10px 8px 0 0}small{color:#aaa;display:block;margin-top:18px}#detail{white-space:pre-wrap;word-break:break-all;font:13px monospace;color:#b5b5b5;margin-top:12px}</style></head>
-<body><main><h1>Vibra Install Check</h1><p>This page checks the actual GitHub Pages deployment at <b>/Vibra/</b>, not localhost.</p><div id="results" role="status">Running checks…</div><button type="button" id="try">Install Vibra</button><a class="action" href="/Vibra/">Open Vibra</a><p id="help">Android: Chrome menu ⋮ → Install app / Add to Home screen. iPhone: Safari Share → Add to Home Screen.</p><div id="detail"></div><small>Browser installation cannot be forced; a browser may decline to offer a native prompt. This diagnostic does not access your Supabase account.</small></main>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#090909"><meta name="vibra-pwa-version" content="3.3.0"><link rel="manifest" href="./manifest.json?v=3.3"><link rel="apple-touch-icon" href="./assets/apple-touch-icon.png"><title>Vibra · Installation Repair</title>
+<style>*,*::before,*::after{box-sizing:border-box}body{margin:0;background:#090909;color:#f4f4f4;font:15px system-ui,-apple-system,sans-serif;line-height:1.5}main{max-width:630px;margin:24px auto;padding:22px;border:1px solid #303030;border-radius:22px;background:#171717;box-shadow:0 18px 55px #0007}h1{font-size:26px;margin:0 0 5px}p{color:#b8b8b8;margin:8px 0 20px}#checks .check{display:flex;gap:10px;align-items:flex-start;border-bottom:1px solid #323232;padding:13px 0}.check b{min-width:25px}.ok b{color:#65d79d}.bad b{color:#ff6975}.warn b{color:#ffcb65}.info{margin-top:17px;padding:14px;border:1px solid #3b3b3b;border-radius:12px;background:#222;font-size:13px;color:#ddd}button,a.button{border:0;padding:12px 14px;border-radius:10px;font-size:13px;display:inline-block;font-weight:700;cursor:pointer;text-decoration:none;background:#ed3949;color:#fff;margin:7px 4px 0 0}button.secondary,a.secondary{background:#303030;color:#fff}#detail{font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;color:#aaa}strong{color:#fff}.tip{font-size:13px;color:#d7d7d7}.site{color:#ff8790}</style></head>
+<body><main><div style="display:flex;align-items:center;gap:15px;margin-bottom:20px"><img src="./assets/icon-192.png" width="60" height="60" style="border-radius:13px" alt="Vibra"><div><h1>Vibra Install Repair</h1><span class="site">dipam03.github.io/Vibra/</span></div></div>
+<p>This checks the <strong>actually deployed files on your phone</strong> and can clear old Vibra PWA caches. No Supabase login needed.</p>
+<div id="checks" role="status" aria-live="polite">Checking installation files…</div>
+<div class="info" id="message">Checking the manifest, icons and service worker…</div>
+<button type="button" id="install">Install Vibra</button><button type="button" id="repair" class="secondary">Repair old cache & reload</button><a class="button secondary" href="./">Open Vibra</a>
+<div id="detail"></div><p class="tip">Android Chrome: if there is no install prompt, use Chrome ⋮ → Install app / Add to Home screen. iPhone: Safari → Share → Add to Home Screen. Browser permission cannot be bypassed.</p></main>
 <script>
-let promptEvent=null;
-window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();promptEvent=e;document.getElementById('help').textContent='Chrome installation prompt is ready. Tap Install Vibra.'});
-window.addEventListener('appinstalled',()=>{document.getElementById('help').textContent='Vibra installed successfully.'});
-const check=async(path,label,parse=false)=>{try{let response=await fetch(path,{cache:'no-store'});if(!response.ok)throw Error('HTTP '+response.status);if(parse)await response.json();return [true,label+' ('+response.status+')'];}catch(err){return [false,label+': '+String(err.message||err)]}};
-async function audit(){
- const tests=[]; const root=location.pathname.startsWith('/Vibra/');tests.push([root,'GitHub Pages path /Vibra/']);tests.push([location.protocol==='https:','HTTPS']);
- const m=await check('/Vibra/manifest.webmanifest','Manifest',true);tests.push(m);
- if(m[0]) {try{const manifest=await (await fetch('/Vibra/manifest.webmanifest',{cache:'no-store'})).json(); tests.push([manifest.start_url==='/Vibra/'&&manifest.scope==='/Vibra/'&&manifest.id==='/Vibra/','Correct manifest start URL, ID and scope']);}catch(e){tests.push([false,'Cannot parse manifest: '+e.message])}}
- const paths=['/Vibra/sw.js','/Vibra/pwa.js','/Vibra/assets/icon-192.png','/Vibra/assets/icon-512.png','/Vibra/assets/icon-maskable-512.png']; for(const path of paths)tests.push(await check(path,path));
- let sw='Service worker unsupported';try{if('serviceWorker' in navigator){const reg=await navigator.serviceWorker.register('/Vibra/sw.js',{scope:'/Vibra/',updateViaCache:'none'});await reg.update();sw='Service worker registered for '+reg.scope;tests.push([reg.scope===location.origin+'/Vibra/',sw])}else tests.push([false,sw])}catch(e){tests.push([false,'Service worker: '+e.message])}
- document.getElementById('results').innerHTML=tests.map(([ok,label])=>'<div class="check '+(ok?'ok':'bad')+'">'+(ok?'✓ ':'✕ ')+label.replaceAll('&','&amp;').replaceAll('<','&lt;')+'</div>').join('');
- document.getElementById('detail').textContent=tests.some(t=>!t[0])?'A red check usually means a missing or incorrectly deployed file. Upload all ZIP files directly inside the Vibra repository root.':'';
-}
-document.getElementById('try').addEventListener('click',async()=>{if(matchMedia('(display-mode: standalone)').matches){document.getElementById('help').textContent='Already running as installed app.';return}if(promptEvent){const e=promptEvent;promptEvent=null;try{await e.prompt();await e.userChoice}catch(err){document.getElementById('help').textContent=err.message}return}document.getElementById('help').textContent=/iPhone|iPad/i.test(navigator.userAgent)?'Safari → Share → Add to Home Screen.':'Chrome → three-dot menu ⋮ → Install app or Add to Home screen. Browser prompt is not yet available.'});
-audit();
+(()=>{'use strict';
+ const BASE=new URL('./',location.href), $=id=>document.getElementById(id);
+ const st={prompt:null,worker:null};
+ const secure=()=>isSecureContext&&(location.protocol==='https:'||location.hostname==='localhost'||location.hostname==='127.0.0.1');
+ const standalone=()=>matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+ const render=(arr)=>{$('checks').innerHTML=arr.map(([ok,txt])=>`<div class="check ${ok===true?'ok':ok===false?'bad':'warn'}"><b>${ok===true?'✓':ok===false?'✕':'!'}</b><span></span></div>`).join('');Array.from($('checks').children).forEach((n,i)=>n.lastElementChild.textContent=arr[i][1]);};
+ async function get(path,kind){const res=await fetch(new URL(path,BASE),{cache:'no-store'});if(!res.ok)throw Error('HTTP '+res.status);if(kind==='json')return res.json();if(kind==='image'){const blob=await res.blob();if(!blob.type.startsWith('image/'))throw Error('not an image ('+blob.type+')');const pic=await createImageBitmap(blob);return [pic.width,pic.height];}if(kind==='js' && (res.headers.get('content-type')||'').includes('text/html'))throw Error('HTML returned instead of JavaScript');return res;}
+ async function audit(){const results=[];
+ results.push([secure(),'Secure HTTPS context']);
+ results.push([location.pathname.startsWith('/Vibra/'),'Correct /Vibra/ repo path']);
+ let manifest=null;
+ try{manifest=await get('manifest.json?v=3.3','json');results.push([true,'manifest.json exists and is valid JSON']);}catch(e){results.push([false,'manifest.json: '+e.message]);}
+ if(manifest){results.push([manifest.id==='/Vibra/'&&manifest.scope==='/Vibra/'&&manifest.start_url==='/Vibra/'&&manifest.display==='standalone','Correct manifest ID, scope, start URL and display']);}
+ for(const [path,size] of [['assets/icon-192.png',192],['assets/icon-512.png',512],['assets/icon-maskable-512.png',512]]){try{const [w,h]=await get(path,'image');results.push([w===size&&h===size,`${path} (${w}×${h})`]);}catch(e){results.push([false,`${path}: ${e.message}`]);}}
+ for(const path of ['pwa.js?v=3.3','sw.js','app.js','index.html']){try{await get(path,path.endsWith('js')?'js':undefined);results.push([true,path+' reachable']);}catch(e){results.push([false,path+': '+e.message]);}}
+ try{const home=await (await fetch(BASE,{cache:'no-store'})).text();results.push([home.includes('vibra-pwa-version')&&home.includes('3.3.0'),'Homepage actually deployed with Vibra PWA v3.3']);}catch(e){results.push([false,'Homepage unavailable: '+e.message]);}
+ if('serviceWorker' in navigator){try{st.worker=await navigator.serviceWorker.register(new URL('sw.js',BASE),{scope:BASE.pathname,updateViaCache:'none'});await st.worker.update();results.push([st.worker.scope===BASE.href,'Service worker registered for '+st.worker.scope]);}catch(e){results.push([false,'Service worker registration: '+e.message]);}}
+ else results.push([false,'Service workers unsupported in this browser']);
+ results.push([standalone()?true:st.prompt?true:null,standalone()?'Already installed as web app':st.prompt?'Browser native install prompt ready':'Browser has not offered native install prompt yet (not necessarily an error)']);
+ render(results);
+ $('message').textContent=results.some(([ok])=>ok===false)?'Some files are missing or outdated. Upload the new ZIP contents directly to the root of your Vibra GitHub repository, then tap Repair old cache & reload.':standalone()?'Vibra is already installed on this device.':st.prompt?'All checks passed. Tap Install Vibra for the browser install prompt.':'Site files look correct. If Install still does not show a prompt, Chrome decides when to offer it. Try Chrome ⋮ → Install app or Add to Home screen.';
+ }
+ window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();st.prompt=e;$('message').textContent='Native install prompt is ready! Tap Install Vibra.';});
+ window.addEventListener('appinstalled',()=>{$('message').textContent='Vibra installed successfully.';st.prompt=null;});
+ $('install').addEventListener('click',()=>{if(standalone()){$('message').textContent='Already installed';return;}if(st.prompt){const e=st.prompt;st.prompt=null;try{void e.prompt();}catch(err){$('message').textContent=err.message;}return;}$('message').textContent=/iPhone|iPad/i.test(navigator.userAgent)?'Open in Safari → Share → Add to Home Screen.':/Android/i.test(navigator.userAgent)?'Open directly in Chrome → ⋮ → Install app (or Add to Home screen).':'In your browser menu, choose Install app. Native prompt not available yet.';});
+ $('repair').addEventListener('click',async()=>{
+ $('message').textContent='Clearing Vibra cache…';
+ try{if('serviceWorker' in navigator){for(const reg of await navigator.serviceWorker.getRegistrations())if(reg.scope===BASE.href)await reg.unregister();}
+ if('caches' in window){for(const key of await caches.keys())if(key.startsWith('vibra-shell-'))await caches.delete(key);}
+ location.replace(BASE.href+'?pwa-refresh='+Date.now());
+ }catch(e){$('message').textContent='Cache reset failed: '+e.message;}
+ });
+ void audit();
+})();
 </script></body></html>

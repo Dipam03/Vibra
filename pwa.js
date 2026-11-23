@@ -1,195 +1,140 @@
-/* Vibra PWA v3.2: independent of the Supabase/login module.
-   Loaded synchronously in the page head so beforeinstallprompt is not missed. */
+/* Vibra Install v3.3 – runs before Supabase authentication and captures browser prompts. */
 (() => {
   'use strict';
-  let deferredPrompt = null;
-  let isPrompting = false;
-  let registration = null;
-  const sheetId = 'vibra-install-sheet';
-  const isIOS = () => /iPad|iPhone|iPod/i.test(navigator.userAgent)
-    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  const isAndroid = () => /Android/i.test(navigator.userAgent);
-  const isStandalone = () => window.matchMedia?.('(display-mode: standalone)')?.matches
-    || window.navigator.standalone === true;
-  const isLocalDev = () => ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
-  const secureHost = () => location.protocol === 'https:' || (location.protocol === 'http:' && isLocalDev());
+  const SCRIPT = document.currentScript?.src || new URL('pwa.js', location.href).href;
+  const BASE = new URL('./', SCRIPT);
+  const BASE_PATH = BASE.pathname;
+  const URLS = {
+    home: BASE.href,
+    manifest: new URL('manifest.json?v=3.3', BASE).href,
+    worker: new URL('sw.js', BASE).href,
+    diagnostics: new URL('install-check.html?v=3.3', BASE).href,
+    icon: new URL('assets/icon-192.png', BASE).href
+  };
+  let installEvent = null;
+  let installed = false;
+  let swRegistration = null;
+  let lastSwError = '';
+  let busy = false;
+  const ios = () => /iP(?:hone|ad|od)/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const android = () => /Android/i.test(navigator.userAgent);
+  const inAppBrowser = () => /Instagram|FBAN|FBAV|FB_IAB|WhatsApp|Line\/|MicroMessenger|Snapchat|TikTok/i.test(navigator.userAgent);
+  const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const secure = () => isSecureContext && (location.protocol === 'https:' || ['localhost','127.0.0.1','[::1]'].includes(location.hostname));
 
-  function hideGuide() {
-    const sheet = document.getElementById(sheetId);
-    if (sheet) sheet.remove();
-    document.removeEventListener('keydown', escListener);
-  }
-  function escListener(event) { if (event.key === 'Escape') hideGuide(); }
-  function steps() {
-    if (isStandalone()) return {
-      title: 'Vibra is installed',
-      intro: 'Vibra is already open in app mode. You can open it from your home screen.',
-      items: [],
-    };
-    if (!secureHost()) return {
-      title: 'Open your hosted Vibra website',
-      intro: 'Installation works on HTTPS websites (and localhost for development), not a downloaded HTML file or an ordinary HTTP link.',
-      items: [
-        'Upload all files to your GitHub Pages repository, including manifest.webmanifest, sw.js, pwa.js and the assets folder.',
-        'Open your public https://…github.io/… site in Chrome or Safari.',
-        'Tap Install Vibra again.'
-      ],
-    };
-    if (isIOS()) return {
-      title: 'Install Vibra on iPhone / iPad',
-      intro: 'Apple requires the Home Screen install step in the browser; a website cannot start this permission dialog automatically.',
-      items: [
-        'Open https://dipam03.github.io/Vibra/ in Safari. (On supported iOS versions, the Share menu in other browsers may also work.)',
-        'Tap the Share icon (square with upward arrow).',
-        'Choose Add to Home Screen.',
-        'If shown, enable Open as Web App, then tap Add.'
-      ],
-    };
-    if (isAndroid()) return {
-      title: 'Install Vibra on Android',
-      intro: 'Your browser has not offered its one-tap install prompt yet. You can still use the browser menu to add Vibra.',
-      items: [
-        'Open https://dipam03.github.io/Vibra/ in Google Chrome (not in Instagram/WhatsApp in-app browser).',
-        'Tap the three-dot menu (⋮) at the top right.',
-        'Tap Install app or Add to Home screen (wording varies by browser).',
-        'Confirm Install. If only Create shortcut is available, Chrome is not offering a full app installation yet.'
-      ],
-    };
+  function status() {
     return {
-      title: 'Install Vibra',
-      intro: 'This browser has not provided an installation prompt for Vibra.',
-      items: [
-        'Open the live HTTPS website in Chrome or Microsoft Edge.',
-        'Open the browser menu and choose Install Vibra / Install app (or look for the install icon in the address bar).',
-        'If the option is missing, check the installed site status below and try refreshing.'
-      ],
+      version: '3.3.0', page: location.href, base: BASE_PATH,
+      secure: secure(), standalone: standalone() || installed,
+      nativePromptReady: !!installEvent,
+      serviceWorkerSupported: 'serviceWorker' in navigator,
+      workerReady: !!swRegistration?.active,
+      serviceWorkerError: lastSwError,
+      android: android(), ios: ios(), inAppBrowser: inAppBrowser()
     };
   }
-  function showGuide(message = '') {
-    hideGuide();
-    const guide = steps();
-    const root = document.createElement('div');
-    root.id = sheetId;
-    root.className = 'vibra-install-backdrop';
-    root.innerHTML = `
-      <section class="vibra-install-panel" role="dialog" aria-modal="true" aria-labelledby="vibra-install-title">
-        <button class="vibra-install-close" type="button" aria-label="Close install instructions" data-pwa-close>×</button>
-        <div class="vibra-install-app-row">
-          <img src="/Vibra/assets/icon-192.png" alt="Vibra app icon" width="64" height="64" />
-          <div><strong>Vibra</strong><span>Social web app · Black / white / red</span></div>
-        </div>
-        <h2 id="vibra-install-title">${guide.title}</h2>
-        <p>${message || guide.intro}</p>
-        ${guide.items.length ? `<ol class="vibra-install-steps">${guide.items.map((item) => `<li>${item}</li>`).join('')}</ol>` : ''}
-        <div class="vibra-install-check" id="vibra-install-check" aria-live="polite">Checking installation setup…</div>
-        <div class="vibra-install-actions">
-          <button type="button" class="vibra-install-secondary" data-pwa-close>Got it</button>
-          <button type="button" class="vibra-install-primary" data-pwa-retry>Try installing</button>
-        </div>
-      </section>`;
-    // The content above is static app-owned guidance, never sourced from user text.
-    root.addEventListener('click', (event) => {
-      if (event.target === root || event.target.closest('[data-pwa-close]')) hideGuide();
-      else if (event.target.closest('[data-pwa-retry]')) { hideGuide(); void open(); }
+  function hide() { document.querySelector('#vibra-install-sheet')?.remove(); }
+  function copyText(str) {
+    if (navigator.clipboard?.writeText && window.isSecureContext) return navigator.clipboard.writeText(str);
+    const input = document.createElement('textarea'); input.value = str; input.style.position='fixed'; input.style.top='-1000px';
+    document.body.append(input); input.select(); document.execCommand('copy'); input.remove(); return Promise.resolve();
+  }
+  function guide(message) {
+    hide();
+    const root=document.createElement('div');
+    root.id='vibra-install-sheet'; root.className='vibra-install-backdrop';
+    const state=status();
+    let title='Install Vibra';
+    let intro=message || '';
+    let steps=[];
+    if (state.standalone) {
+      title='Vibra is already installed';
+      intro=intro || 'You are using the installed web app. Find Vibra on your home screen or app list.';
+    } else if (!state.secure) {
+      title='Open the live HTTPS website';
+      intro=intro || 'This page must use HTTPS for web-app installation.';
+      steps=['Open https://dipam03.github.io/Vibra/ on your phone.', 'Tap Install Vibra there.'];
+    } else if (state.ios) {
+      title='Install Vibra on iPhone';
+      intro=intro || 'Apple does not allow websites to open the Home Screen installation dialog automatically.';
+      steps=['Open the site in Safari.', 'Tap Share (square with an up arrow).','Select Add to Home Screen. If shown, turn on Open as Web App.','Tap Add. Vibra will appear on your home screen.'];
+    } else if (state.inAppBrowser) {
+      title='Open Vibra in Chrome';
+      intro=intro || 'WhatsApp/Instagram in-app browsers usually do not allow PWA installation.';
+      steps=['Tap the menu in this browser and choose Open in browser / Open in Chrome.', 'Open the website in Google Chrome.', 'Tap the Install button again or use Chrome menu ⋮ → Install app.'];
+    } else if (state.android) {
+      title='Install Vibra on Android';
+      intro=intro || 'Chrome has not provided a one-tap installation prompt on this device yet.';
+      steps=['Open Vibra directly in Google Chrome.', 'Tap Chrome menu ⋮ at the top-right.', 'Choose Install app or Add to Home screen.','Confirm Install. If only Create shortcut appears, the browser has not approved full PWA installation.'];
+    } else {
+      intro=intro || 'Your current browser did not provide its native install prompt.';
+      steps=['Open Vibra in Chrome or Microsoft Edge.', 'Open the browser menu and select Install app / Install Vibra, if available.'];
+    }
+    const ol=steps.length?`<ol class="vibra-install-steps">${steps.map(s=>`<li>${s}</li>`).join('')}</ol>`:'';
+    root.innerHTML=`<section class="vibra-install-panel" role="dialog" aria-modal="true" aria-labelledby="vibra-pwa-title">
+      <button class="vibra-install-close" type="button" data-pwa-close aria-label="Close">×</button>
+      <div class="vibra-install-app-row"><img src="${URLS.icon}" alt="Vibra icon" width="64" height="64"><div><strong>Vibra</strong><span>Install from your GitHub Pages website</span></div></div>
+      <h2 id="vibra-pwa-title">${title}</h2><p id="vibra-pwa-msg"></p>${ol}
+      <div id="vibra-pwa-state" class="vibra-install-check" role="status"></div>
+      <div class="vibra-install-actions"><button type="button" class="vibra-install-secondary" data-pwa-copy>Copy website link</button><button type="button" class="vibra-install-primary" data-pwa-retry>Try again</button></div>
+      <a href="${URLS.diagnostics}" style="display:block;text-align:center;margin-top:14px;color:#ff6875;text-decoration:underline;font-size:13px;font-weight:700">Check why installation is unavailable</a>
+    </section>`;
+    root.querySelector('#vibra-pwa-msg').textContent=intro;
+    root.querySelector('#vibra-pwa-state').textContent=state.standalone?'Already installed':state.nativePromptReady?'Native install prompt ready':state.serviceWorkerError?'Service worker error: '+state.serviceWorkerError:'Browser install prompt not ready. Use the instructions above.';
+    root.addEventListener('click', e=>{
+      if (e.target===root||e.target.closest('[data-pwa-close]')) hide();
+      if (e.target.closest('[data-pwa-copy]')) void copyText(URLS.home).then(()=>{e.target.textContent='Link copied';}).catch(()=>{});
+      if (e.target.closest('[data-pwa-retry]')) {hide();void startInstall();}
     });
-    document.body.appendChild(root);
-    document.addEventListener('keydown', escListener);
-    root.querySelector('[data-pwa-close]')?.focus();
-    void diagnostic(root.querySelector('#vibra-install-check'));
+    if(!document.body) return; document.body.append(root);
   }
-  async function diagnostic(node) {
-    if (!node) return;
-    const checks = [`${secureHost() ? '✓' : '✕'} HTTPS / localhost`];
-    try {
-      const response = await fetch('/Vibra/manifest.webmanifest', {cache: 'no-store'});
-      if (!response.ok) throw Error(`HTTP ${response.status}`);
-      const manifest = await response.json();
-      checks.push(`${manifest.name && manifest.start_url && manifest.display === 'standalone' ? '✓' : '✕'} Web app manifest`);
-      const paths = new Set((manifest.icons || []).flatMap((icon) => (icon.sizes || '').split(' ')));
-      checks.push(`${paths.has('192x192') && paths.has('512x512') ? '✓' : '✕'} App icons (192 / 512)`);
-    } catch { checks.push('✕ Manifest not accessible on this website'); }
-    checks.push(`${registration || navigator.serviceWorker?.controller ? '✓' : '…'} Service worker`);
-    node.textContent = checks.join('  ·  ');
-    const link = document.createElement('a');
-    link.href = '/Vibra/install-check.html';
-    link.textContent = 'Run full installation check';
-    link.style.cssText = 'display:block;margin-top:8px;color:#ef4444;text-decoration:underline;font-weight:700';
-    node.appendChild(link);
-  }
-  async function open() {
-    if (isPrompting) return;
-    if (isStandalone()) { showGuide(); return; }
-    if (deferredPrompt) {
-      const prompt = deferredPrompt;
-      deferredPrompt = null; // Each event can be used only once.
-      isPrompting = true;
+  function startInstall() {
+    if (busy) return;
+    if (standalone() || installed) {guide();return;}
+    if (installEvent) {
+      const event=installEvent;
+      installEvent=null;
+      busy=true;
+      // IMPORTANT: prompt() is called directly from the click handler; not after async checks.
       try {
-        // Keep prompt() in the synchronous user-click call chain.
-        await prompt.prompt();
-        const choice = await prompt.userChoice;
-        if (choice?.outcome === 'accepted') {
-          hideGuide();
-          // The install completes later; `appinstalled` confirms it.
-          console.info('Vibra: browser installation accepted');
-        } else {
-          showGuide('Installation was dismissed. You can try again from your browser menu.');
-        }
-      } catch (err) {
-        console.warn('Vibra: native install prompt unavailable:', err);
-        showGuide();
-      } finally { isPrompting = false; }
+        const promise=event.prompt();
+        Promise.resolve(promise).then(()=>event.userChoice).then(choice=>{
+          if(choice?.outcome==='dismissed') guide('Installation was dismissed. You can use the Chrome menu to install Vibra.');
+        }).catch(err=>guide('The browser did not open the installation prompt: '+(err?.message||'Unknown error'))).finally(()=>{busy=false;});
+      } catch (err) {busy=false;guide('Browser blocked the install prompt: '+(err?.message||'Unknown error'));}
       return;
     }
-    // Some new Chromium versions expose navigator.install() instead of a saved event.
     if (typeof navigator.install === 'function') {
-      isPrompting = true;
-      let request;
-      try { request = navigator.install(); }
-      catch (err) { console.warn('Vibra navigator.install failed:', err); }
-      try {
-        if (!request) { showGuide(); return; }
-        await request;
-      } catch (err) { console.warn('Vibra navigator.install rejected:', err); showGuide(); }
-      finally { isPrompting = false; }
+      busy=true;
+      try { Promise.resolve(navigator.install()).catch(err=>guide('Browser install did not complete: '+(err?.message||'Unknown error'))).finally(()=>{busy=false;}); }
+      catch (err) {busy=false;guide('Browser install could not start: '+(err?.message||'Unknown error'));}
       return;
     }
-    showGuide();
+    guide();
   }
-  function syncInstallButtons() {
-    document.querySelectorAll('[data-action="install-app"]').forEach((button) => {
-      button.title = isStandalone() ? 'Vibra already installed' : 'Install Vibra on this device';
-      button.setAttribute('aria-label', isStandalone() ? 'Vibra is installed' : 'Install Vibra app');
+  function updateInstallButtons(){
+    document.querySelectorAll('[data-action="install-app"]').forEach(el=>{
+      el.title=standalone()||installed?'Vibra is installed':installEvent?'Install Vibra now':'Install Vibra (browser instructions)';
     });
   }
-  function registerServiceWorker() {
-    if (!secureHost() || !('serviceWorker' in navigator)) return;
-    navigator.serviceWorker.register('/Vibra/sw.js', {scope: '/Vibra/', updateViaCache: 'none'})
-      .then((reg) => { registration = reg; void reg.update().catch(() => {}); })
-      .catch((err) => console.warn('Vibra: service worker registration failed:', err));
+  async function setupWorker(){
+    if (!secure() || !('serviceWorker' in navigator)) return;
+    try {
+      swRegistration=await navigator.serviceWorker.register(URLS.worker,{scope:BASE_PATH, updateViaCache:'none'});
+      lastSwError='';
+      await swRegistration.update().catch(()=>{});
+    } catch(e){lastSwError=String(e?.message||e);console.warn('Vibra PWA worker:',e);}
   }
-  // Set up early: app.js is an ES module that can block on Supabase auth or a CDN import.
-  window.addEventListener('beforeinstallprompt', (event) => {
-    event.preventDefault();
-    deferredPrompt = event;
-    syncInstallButtons();
-  });
-  window.addEventListener('appinstalled', () => {
-    deferredPrompt = null;
-    hideGuide();
-    syncInstallButtons();
-    console.info('Vibra installed successfully');
-  });
-  document.addEventListener('click', (event) => {
-    const installButton = event.target.closest?.('[data-action="install-app"]');
-    if (!installButton) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    void open();
-  }, true);
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', registerServiceWorker, {once: true});
-  else registerServiceWorker();
-  window.VibraInstall = {open, showGuide, isStandalone, check: () => ({
-    secure: secureHost(), standalone: !!isStandalone(), readyToPrompt: !!deferredPrompt,
-    serviceWorker: !!registration, scope: new URL('/Vibra/', location.origin).href
-  })};
+  // Capture as soon as possible, even when app.js or Supabase fails to load.
+  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEvent=e;updateInstallButtons();});
+  window.addEventListener('appinstalled',()=>{installed=true;installEvent=null;hide();updateInstallButtons();});
+  document.addEventListener('click',e=>{
+    const install=e.target.closest?.('[data-action="install-app"], [data-vibra-install]');
+    if(!install) return;
+    e.preventDefault();e.stopImmediatePropagation();startInstall();
+  },true);
+  window.addEventListener('keydown',e=>{if(e.key==='Escape')hide();});
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>{void setupWorker();updateInstallButtons();},{once:true});
+  else {void setupWorker();updateInstallButtons();}
+  window.VibraInstall={open:startInstall,showGuide:guide,check:status,isStandalone:standalone};
 })();
