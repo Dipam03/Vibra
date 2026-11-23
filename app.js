@@ -25,7 +25,7 @@ const S = {
   inboxTab:'chats', reelObserver: null, reelPausedByUser:new Set(), preview: false, shareSearchResults:[], lastShareId:null, chatSummaries:new Map(),
   reelActiveId:null, reelStartId:null, reelTag:'', reelOffset:0, reelHasMore:true, reelLoadingMore:false,
   reelProgress:new Map(), reelInterests:{}, reelUpdatedAt:0, reelTracking:new Set(), reelPersistTimer:0, reelLastLocalSave:0,
-  homeScrollY:0, reelRestoreFromServer:false
+  homeScrollY:0, reelRestoreFromServer:false, reelViewTotals:new Map(), reelViewRecorded:new Set()
 };
 const ICON_PATHS = {
   'house':'<path d="m3 10 9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22v-8h6v8"/>',
@@ -220,6 +220,41 @@ async function showReelsForHashtag(tag){
 
 const niceTime = d => { const t = new Date(d); const n = Math.max(0,(Date.now()-t.getTime())/1000); return n<60?'now':n<3600?`${Math.floor(n/60)}m`:n<86400?`${Math.floor(n/3600)}h`:n<604800?`${Math.floor(n/86400)}d`:t.toLocaleDateString(undefined,{month:'short',day:'numeric'}); };
 const num = n => n>=1e6?(n/1e6).toFixed(1)+'m':n>=1e3?(n/1e3).toFixed(1)+'k':String(n||0);
+// Reel views are UNIQUE signed-in viewers who actually played a Reel for at least 2 seconds.
+// The total is maintained by a database trigger; viewers cannot edit totals themselves.
+const reelViews = id => Math.max(0,Number(S.reelViewTotals.get(id)||0));
+const reelViewMarkup = (id,klass='') => `<span class="reel-view-counter ${klass}" title="Unique accounts that watched this reel">${I('play',15)}<span class="reel-view-value" data-view-count-id="${a(id)}">${num(reelViews(id))}</span><span class="reel-views-word">views</span></span>`;
+function updateReelViewCount(id,count){
+  const value=Math.max(0,Number(count)||0);
+  S.reelViewTotals.set(id,value);
+  document.querySelectorAll('[data-view-count-id]').forEach(el=>{
+    if(el.dataset.viewCountId===id)el.textContent=num(value);
+  });
+}
+async function loadReelViewCounts(ids){
+  if(!db||!uid())return;
+  const reels=[...new Set(ids.filter(Boolean))];
+  if(!reels.length)return;
+  const {data,error}=await db.from('reel_view_totals').select('reel_id,views').in('reel_id',reels);
+  if(error){console.warn('Reel views unavailable: deploy v3.8 SQL:',error.message);return;}
+  const found=new Map((data||[]).map(row=>[row.reel_id,row.views]));
+  for(const id of reels)updateReelViewCount(id,found.get(id)||0);
+}
+async function recordReelView(id){
+  const viewer=uid(),post=S.posts.get(id);
+  if(!db||!viewer||!post?.is_reel||post.user_id===viewer||S.reelViewRecorded.has(id))return;
+  S.reelViewRecorded.add(id);
+  try{
+    // Conflicting (reel,viewer) means this account has already been counted.
+    const {error}=await db.from('reel_video_views').upsert({reel_id:id,viewer_id:viewer},{onConflict:'reel_id,viewer_id',ignoreDuplicates:true});
+    if(error)throw error;
+    if(viewer===uid())await loadReelViewCounts([id]);
+  }catch(err){
+    S.reelViewRecorded.delete(id);
+    console.warn('Could not record reel view:',err.message);
+  }
+}
+
 const initials = p => (p?.display_name || p?.username || 'V').slice(0,1).toUpperCase();
 const name = p => p?.display_name || p?.username || 'Member';
 const badge = p => p?.is_verified ? I('badge-check',16,'verify-icon verified-badge') : '';
@@ -353,9 +388,9 @@ function postCard(p) {
   const person=getProfile(p.user_id)||{}; const count=p.likeCount||0;
   const media=p.media||[]; const first=media[p.slide||0];
   return `<article class="post-card" data-post-id="${p.id}"><div class="post-head"><div class="post-author">${storyAvatar(person,'sm')}<button type="button" class="post-author-name" data-action="profile" data-id="${p.user_id}"><span><strong>${h(person.username||'member')} ${badge(person)}</strong><small>${h(p.location||'')} ${p.location?' · ':''}${niceTime(p.created_at)} ago</small></span></button></div><button class="icon-btn" data-action="post-options" data-id="${p.id}">${I('ellipsis',23)}</button></div>
-    <div class="post-media">${first?(first.media_type==='video'?(p.is_reel?`<div class="feed-reel-preview">${reelVideo(first.storage_path).replace('class="reel-vid"','class="post-main-video feed-reel-video"')}<button class="feed-reel-open" data-action="open-reel" data-id="${a(p.id)}" aria-label="Watch this reel in Reels">${I('play',28)}<span>Watch Reel</span></button></div>`:dataVid(first.storage_path,'post-main-video')):dataImg(first.storage_path,`Post by ${person.username}`,'post-main-img')):`<div class="post-media-missing">${I('image-off',36)}</div>`}${media.length>1?`<div class="media-pips">${media.map((_,i)=>`<span class="${i===(p.slide||0)?'selected':''}"></span>`).join('')}</div>${p.slide?`<button class="media-prev" data-action="slide" data-id="${p.id}" data-dir="-1">${I('chevron-left',18)}</button>`:''}${(p.slide||0)<media.length-1?`<button class="media-next" data-action="slide" data-id="${p.id}" data-dir="1">${I('chevron-right',18)}</button>`:''}`:''}</div>
+    <div class="post-media">${first?(first.media_type==='video'?(p.is_reel?`<div class="feed-reel-preview">${reelVideo(first.storage_path).replace('class="reel-vid"','class="post-main-video feed-reel-video"')}<button class="feed-reel-open" data-action="open-reel" data-id="${a(p.id)}" aria-label="Watch this reel in Reels">${I('play',28)}<span>Watch Reel</span></button>${reelViewMarkup(p.id,'feed-reel-views')}</div>`:dataVid(first.storage_path,'post-main-video')):dataImg(first.storage_path,`Post by ${person.username}`,'post-main-img')):`<div class="post-media-missing">${I('image-off',36)}</div>`}${media.length>1?`<div class="media-pips">${media.map((_,i)=>`<span class="${i===(p.slide||0)?'selected':''}"></span>`).join('')}</div>${p.slide?`<button class="media-prev" data-action="slide" data-id="${p.id}" data-dir="-1">${I('chevron-left',18)}</button>`:''}${(p.slide||0)<media.length-1?`<button class="media-next" data-action="slide" data-id="${p.id}" data-dir="1">${I('chevron-right',18)}</button>`:''}`:''}</div>
     <div class="post-actions"><button title="Like" class="icon-btn ${p.liked?'is-liked':''}" data-action="like" data-id="${p.id}">${I('heart',25)}</button><button title="Comment" class="icon-btn" data-action="comments" data-id="${p.id}">${I('message-circle',24)}</button><button title="Share" class="icon-btn" data-action="share" data-id="${p.id}">${I('send',23)}</button><span class="spacer"></span><button title="Save" class="icon-btn ${S.saved.has(p.id)?'is-saved':''}" data-action="save" data-id="${p.id}">${I('bookmark',25)}</button></div>
-    <div class="post-copy"><strong>${num(count)} ${count===1?'like':'likes'}</strong>${p.user_id===uid()?`<button type="button" class="insights-inline" data-action="post-insights" data-id="${p.id}">${I('eye',15)} View insights</button>`:''}<p><button data-action="profile" data-id="${p.user_id}" class="inline-user">${h(person.username||'member')}</button> ${captionHtml(p.caption)}</p><button class="comment-link" data-action="comments" data-id="${p.id}">View comments${p.commentCount?' · '+num(p.commentCount):''}</button></div>
+    <div class="post-copy"><strong>${num(count)} ${count===1?'like':'likes'}</strong>${p.is_reel?reelViewMarkup(p.id,'post-reel-views'):''}${p.user_id===uid()?`<button type="button" class="insights-inline" data-action="post-insights" data-id="${p.id}">${I('eye',15)} View insights</button>`:''}<p><button data-action="profile" data-id="${p.user_id}" class="inline-user">${h(person.username||'member')}</button> ${captionHtml(p.caption)}</p><button class="comment-link" data-action="comments" data-id="${p.id}">View comments${p.commentCount?' · '+num(p.commentCount):''}</button></div>
     ${canCommentOn(p.user_id)?`<form class="quick-comment" data-form="comment" data-post-id="${p.id}"><div class="mention-root"><input name="body" data-mention-input="1" placeholder="Add a comment... @friend" maxlength="1000" required aria-label="Add a comment" autocomplete="off"/><div class="mention-choices" hidden></div></div><button type="submit">Post</button></form>`:'<div class="comment-closed">Comments are limited by this account.</div>'}</article>`;
 }
 function captionHtml(c) { return mentionHtml(c||'').replace(/(^|\s)(#[\w]+)/g,(_m,w,t)=>`${w}<button class="hashtag" data-action="tag" data-tag="${a(t)}">${t}</button>`).replace(/\n/g,'<br>'); }
@@ -365,13 +400,13 @@ function emptyState(icon,title,desc,button,view) {
 function exploreMarkup() {
   return `<div class="content-page"><div class="section-heading"><div><p class="eyebrow">FIND YOUR NEXT FAVORITE</p><h1>Explore<span class="brand-dot">.</span></h1><p>Discover the stories everyone's sharing.</p></div><button class="rounded-icon" data-action="nav" data-view="search">${I('search')}</button></div>
     <div class="discover-top">${I('sparkles',20)} <span>Fresh perspectives, new people, infinite inspiration.</span></div>
-    <div class="explore-grid">${S.explore.length?S.explore.map((p,i)=>{const m=p.media?.[0];return `<button class="explore-item ${i%9===2?'feature':''}" data-action="${p.is_reel?'open-reel':'comments'}" data-id="${p.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Explore photo','tile-media')):''}<span class="tile-overlay">${I('heart',18)} ${num(p.likeCount||0)} &nbsp; ${I('message-circle',18)} ${num(p.commentCount||0)}</span>${p.is_reel?`<i class="tile-reel">${I('clapperboard',21)}</i>`:''}</button>`}).join(''):emptyState('compass','Nothing to explore yet','The community will come alive when members start sharing.','Create a post','home')}</div></div>`;
+    <div class="explore-grid">${S.explore.length?S.explore.map((p,i)=>{const m=p.media?.[0];return `<button class="explore-item ${i%9===2?'feature':''}" data-action="${p.is_reel?'open-reel':'comments'}" data-id="${p.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Explore photo','tile-media')):''}<span class="tile-overlay">${I('heart',18)} ${num(p.likeCount||0)} &nbsp; ${I('message-circle',18)} ${num(p.commentCount||0)}</span>${p.is_reel?reelViewMarkup(p.id,'tile-views'):''}${p.is_reel?`<i class="tile-reel">${I('clapperboard',21)}</i>`:''}</button>`}).join(''):emptyState('compass','Nothing to explore yet','The community will come alive when members start sharing.','Create a post','home')}</div></div>`;
 }
 function reelItemMarkup(p){
   const pers=getProfile(p.user_id)||{};
   const media=p.media?.find(m=>m.media_type==='video');
   const hashtags=reelTagList(p.caption).slice(0,4);
-  return `<article class="reel-item" data-reel-id="${a(p.id)}"><div class="reel-video">${media?reelVideo(media.storage_path):''}<div class="reel-shade"></div><button type="button" class="reel-tap-target" data-action="toggle-reel" data-id="${a(p.id)}" aria-label="Play or pause reel"></button><div class="reel-state" aria-hidden="true">${I('play',44)}<small>Tap to play with sound</small></div><div class="reel-info"><button data-action="profile" data-id="${a(p.user_id)}" class="reel-user">${avatar(pers,'sm')}<strong>@${h(pers.username)} ${badge(pers)}</strong></button><p>${captionHtml(p.caption)}</p>${hashtags.length?`<div class="reel-related-tags">${hashtags.map(tag=>`<button type="button" data-action="reel-tag" data-tag="${a(tag)}">#${h(tag)}</button>`).join('')}</div>`:''}</div><div class="reel-actions"><button aria-label="Like reel" data-action="like" data-id="${a(p.id)}" class="${p.liked?'is-liked':''}">${I('heart',27)}<span>${num(p.likeCount||0)}</span></button><button aria-label="Comment on reel" data-action="comments" data-id="${a(p.id)}">${I('message-circle',27)}<span>${num(p.commentCount||0)}</span></button><button aria-label="Share reel" data-action="share" data-id="${a(p.id)}">${I('send',27)}</button><button aria-label="Save reel" data-action="save" data-id="${a(p.id)}" class="${S.saved.has(p.id)?'is-saved':''}">${I('bookmark',27)}</button></div></div></article>`;
+  return `<article class="reel-item" data-reel-id="${a(p.id)}"><div class="reel-video">${media?reelVideo(media.storage_path):''}<div class="reel-shade"></div>${reelViewMarkup(p.id,'reel-player-views')}<button type="button" class="reel-tap-target" data-action="toggle-reel" data-id="${a(p.id)}" aria-label="Play or pause reel"></button><div class="reel-state" aria-hidden="true">${I('play',44)}<small>Tap to play with sound</small></div><div class="reel-info"><button data-action="profile" data-id="${a(p.user_id)}" class="reel-user">${avatar(pers,'sm')}<strong>@${h(pers.username)} ${badge(pers)}</strong></button><p>${captionHtml(p.caption)}</p>${hashtags.length?`<div class="reel-related-tags">${hashtags.map(tag=>`<button type="button" data-action="reel-tag" data-tag="${a(tag)}">#${h(tag)}</button>`).join('')}</div>`:''}</div><div class="reel-actions"><button aria-label="Like reel" data-action="like" data-id="${a(p.id)}" class="${p.liked?'is-liked':''}">${I('heart',27)}<span>${num(p.likeCount||0)}</span></button><button aria-label="Comment on reel" data-action="comments" data-id="${a(p.id)}">${I('message-circle',27)}<span>${num(p.commentCount||0)}</span></button><button aria-label="Share reel" data-action="share" data-id="${a(p.id)}">${I('send',27)}</button><button aria-label="Save reel" data-action="save" data-id="${a(p.id)}" class="${S.saved.has(p.id)?'is-saved':''}">${I('bookmark',27)}</button></div></div></article>`;
 }
 function reelsMarkup() {
   const related=currentReelTags();
@@ -390,7 +425,7 @@ function profileMarkup() {
     <div class="profile-info"><div class="profile-avatar">${storyAvatar(p,'xl')}</div><div class="profile-metadata"><div class="profile-title"><div><h1>${h(p.display_name||p.username)} ${p.is_private?I('lock',17):''}</h1><p>@${h(p.username)} ${badge(p)}</p></div><div class="profile-buttons">${own?`<button class="outline-btn" data-action="edit-profile">${I('pencil',17)} Edit profile</button><button class="rounded-icon" data-action="open-settings">${I('settings',21)}</button>`:`<button class="${relation==='accepted'?'outline-btn':'primary-btn'}" data-action="follow" data-id="${p.id}">${I(relation==='accepted'?'user-check':relation==='pending'?'clock':'user-plus',17)} ${relation==='accepted'?'Following':relation==='pending'?'Requested':'Follow'}</button><button class="outline-btn" data-action="dm-user" data-id="${p.id}">${I('send',17)} Message</button><button class="rounded-icon" data-action="profile-options" data-id="${p.id}">${I('ellipsis')}</button>`}</div></div>
       <div class="profile-stats"><span><b>${num(privateLocked?0:posts.length)}</b> posts</span><button data-action="follow-list" data-id="${p.id}" data-type="followers"><b>${num(p.followersCount||0)}</b> followers</button><button data-action="follow-list" data-id="${p.id}" data-type="following"><b>${num(p.followingCount||0)}</b> following</button></div>
       <div class="profile-bio"><p>${h(p.bio||'Sharing little pieces of life ✨')}</p>${p.website?`<a href="${a(safeLink(p.website))}" target="_blank" rel="noopener noreferrer">${I('link',15)} ${h(p.website)}</a>`:''}</div></div></div>
-    ${privateLocked?`<div class="private-profile">${I('lock-keyhole',34)}<h3>This account is private</h3><p>Follow to see photos and videos.</p></div>`:`<div class="profile-tabs"><button class="${S.profileTab==='posts'?'selected':''}" data-action="profile-tab" data-tab="posts">${I('grid-3x3',17)} POSTS</button><button class="${S.profileTab==='reels'?'selected':''}" data-action="profile-tab" data-tab="reels">${I('clapperboard',17)} REELS</button>${own?`<button class="${S.profileTab==='saved'?'selected':''}" data-action="profile-tab" data-tab="saved">${I('bookmark',17)} SAVED</button>`:''}</div><div class="profile-grid">${visible.length?visible.map(post=>{const m=post.media?.[0];return `<button data-action="${post.is_reel?'open-reel':'comments'}" data-id="${post.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Post photo','tile-media')):''}<span class="tile-overlay">${I('heart',17)} ${num(post.likeCount||0)}</span>${post.is_reel?`<i class="tile-reel">${I('clapperboard',21)}</i>`:''}</button>`}).join(''):`<div class="grid-empty">${I('camera',32)}<h3>No posts to show</h3><p>When moments are shared, they’ll appear here.</p></div>`}</div>`}</div>`;
+    ${privateLocked?`<div class="private-profile">${I('lock-keyhole',34)}<h3>This account is private</h3><p>Follow to see photos and videos.</p></div>`:`<div class="profile-tabs"><button class="${S.profileTab==='posts'?'selected':''}" data-action="profile-tab" data-tab="posts">${I('grid-3x3',17)} POSTS</button><button class="${S.profileTab==='reels'?'selected':''}" data-action="profile-tab" data-tab="reels">${I('clapperboard',17)} REELS</button>${own?`<button class="${S.profileTab==='saved'?'selected':''}" data-action="profile-tab" data-tab="saved">${I('bookmark',17)} SAVED</button>`:''}</div><div class="profile-grid">${visible.length?visible.map(post=>{const m=post.media?.[0];return `<button data-action="${post.is_reel?'open-reel':'comments'}" data-id="${post.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Post photo','tile-media')):''}<span class="tile-overlay">${I('heart',17)} ${num(post.likeCount||0)}</span>${post.is_reel?reelViewMarkup(post.id,'tile-views'):''}${post.is_reel?`<i class="tile-reel">${I('clapperboard',21)}</i>`:''}</button>`}).join(''):`<div class="grid-empty">${I('camera',32)}<h3>No posts to show</h3><p>When moments are shared, they’ll appear here.</p></div>`}</div>`}</div>`;
 }
 function safeLink(s) { try { const u=new URL(s.startsWith('http')?s:`https://${s}`); return ['https:','http:'].includes(u.protocol)?u.href:'#'; } catch { return '#'; } }
 function searchMarkup() {
@@ -400,7 +435,7 @@ function searchMarkup() {
 }
 function searchResultsMarkup() {
   if(!S.searchText.trim()) return `<div class="search-intro">${I('search-check',36)}<h3>What inspires you?</h3><p>Try a username or #hashtag to find moments worth keeping.</p></div>`;
-  return `<h3 class="result-heading">People</h3><div class="result-list">${S.searchResults.map(p=>`<button class="result-user" data-action="profile" data-id="${p.id}">${avatar(p,'lg')}<span><strong>${h(p.username)} ${badge(p)}</strong><small>${h(name(p))}</small></span>${I('chevron-right',19)}</button>`).join('')||'<p class="muted">No matching people.</p>'}</div><h3 class="result-heading">Posts</h3><div class="explore-grid search-grid">${S.searchPosts.map(p=>{const m=p.media?.[0];return `<button class="explore-item" data-action="${p.is_reel?'open-reel':'comments'}" data-id="${p.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Post photo','tile-media')):''}</button>`}).join('')||'<p class="muted">No matching captions.</p>'}</div>`;
+  return `<h3 class="result-heading">People</h3><div class="result-list">${S.searchResults.map(p=>`<button class="result-user" data-action="profile" data-id="${p.id}">${avatar(p,'lg')}<span><strong>${h(p.username)} ${badge(p)}</strong><small>${h(name(p))}</small></span>${I('chevron-right',19)}</button>`).join('')||'<p class="muted">No matching people.</p>'}</div><h3 class="result-heading">Posts</h3><div class="explore-grid search-grid">${S.searchPosts.map(p=>{const m=p.media?.[0];return `<button class="explore-item" data-action="${p.is_reel?'open-reel':'comments'}" data-id="${p.id}">${m?(m.media_type==='video'?dataVid(m.storage_path,'tile-media'):dataImg(m.storage_path,'Post photo','tile-media')):''}${p.is_reel?reelViewMarkup(p.id,'tile-views'):''}</button>`}).join('')||'<p class="muted">No matching captions.</p>'}</div>`;
 }
 function notificationsMarkup() {
   return `<div class="content-page notifications-page"><div class="section-heading"><div><p class="eyebrow">THE LITTLE THINGS</p><h1>Activity<span class="brand-dot">.</span></h1><p>All the love, all in one place.</p></div><button class="outline-btn" data-action="read-all">${I('check-check',17)} Mark read</button></div>
@@ -461,8 +496,20 @@ function installReelObserver() {
     video.muted=false;
     if(!video.dataset.reelBound){
       video.dataset.reelBound='1';
-      video.addEventListener('pause',()=>showReelPlaybackState(video,false));
-      video.addEventListener('playing',()=>showReelPlaybackState(video,false));
+      video.addEventListener('pause',()=>{
+        clearTimeout(video._vibraViewTimer);
+        showReelPlaybackState(video,false);
+      });
+      video.addEventListener('playing',()=>{
+        showReelPlaybackState(video,false);
+        clearTimeout(video._vibraViewTimer);
+        video._vibraViewTimer=setTimeout(()=>{
+          // Scrolling past a Reel or a blocked autoplay does not count as a video view.
+          if(S.view==='reels' && !S.modal && S.reelActiveId===id &&
+             !video.paused && video.isConnected && !document.hidden)
+            void recordReelView(id);
+        },2000);
+      });
       video.addEventListener('loadedmetadata',()=>{
         const seconds=Number(S.reelProgress.get(id)||0);
         if(seconds>0.3 && Number.isFinite(video.duration) && video.duration>0){
@@ -629,6 +676,7 @@ async function hydratePosts(rows) {
     S.posts.set(p.id,p);return p;
   });
   await ensureProfiles(rows.map(x=>x.user_id));
+  await loadReelViewCounts(rows.filter(x=>x.is_reel).map(x=>x.id));
   return out;
 }
 async function fetchFeed() {

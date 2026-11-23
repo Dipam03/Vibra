@@ -1,33 +1,31 @@
-VIBRA v3.7 — REELS RESUME + EXACT HOME REEL + HASHTAG SUGGESTIONS
-================================================================
-Production app: https://dipam03.github.io/Vibra/
+VIBRA v3.8 — REELS VIEW COUNTS
+======================================
+Production URL: https://dipam03.github.io/Vibra/
 
-INSTALL
-1. Extract ZIP; upload ALL files at root of dipam03/Vibra GitHub repo. Replace earlier files.
-2. Keep your current working config.js. This package intentionally excludes config.js.
-3. In Supabase Dashboard (Vibra project) run supabase-upgrade-v3-7.sql in SQL Editor
-   ONLY if this migration has not already been applied to that project.
-4. Wait for Pages deployment, close/reopen Vibra installed PWA; if needed use
-   https://dipam03.github.io/Vibra/install-check.html?v=3.7 -> Repair old cache.
+GitHub upload
+1. Extract this archive and upload ALL files at the ROOT of your Vibra GitHub repository.
+2. Keep your existing configured config.js (this ZIP does not contain it).
+3. The supplied supabase-upgrade-v3-8.sql has already been executed on the connected Vibra
+   project (xzbrtvhmfugpesmyshae). Do NOT run it again on that project.
+4. After GitHub Pages redeploys, fully close and reopen the installed Vibra app.
+   If old files remain cached, use /Vibra/install-check.html to repair its cache.
 
-FEATURES
-- The Reels tab resumes at the account's last watched Reel and video second. Account sync uses
-  private Supabase reel_watch_state (per-user RLS); localStorage is an offline fallback.
-- A Reel clicked in Home opens that EXACT Reel, including older Reels not on the first page.
-- Reels from Explore, Profile and search grids open the selected video, not its comments.
-- Scrolling loads more recommended Reels in batches with hashtag/engagement/follow relevance.
-- Tap a #hashtag from the Reel, or the For you / hashtag pills, to browse matching Reels.
-- Likes, saves, watched reels and followed creators influence the simple transparent
-  local ranking heuristic. It is NOT Instagram's proprietary recommendation algorithm.
-- Bottom nav and fullscreen Reels from v3.6 remain. Videos play with sound if the browser permits;
-  autoplay with sound may need a tap. Manually paused Reels stay paused.
-- Home scroll position returns when you leave Reels and go back Home.
-- Reels shared with a link (?reel=<uuid>) open their Reel viewer directly.
+Where views show
+- Reel player: compact view badge over the video.
+- Home feed: Reel preview badge and views beside the likes.
+- Profile Reels grid, Explore grid and Search results: views on each Reel thumbnail.
 
-TEST
-Open Home, scroll to an old Reel, tap its video, check exact Reel opens; scroll to another,
-visit Profile, go back to Reels: the same Reel/time should continue. Tap #tag, browse matches,
-tap For you. Test with a second account/device to confirm Supabase sync.
+Definition of a view
+A signed-in viewer counts once for a Reel after 2 seconds of real video playback.
+Scrolling past a Reel is not enough. The creator's own plays do not count. Multiple
+rewatches by the same account count once, avoiding accidental inflation. This is a
+UNIQUE-VIEWER count, not Instagram's proprietary replay-based Plays metric.
 
-If installing from a separate Supabase project, run the v3.7 SQL on that project also.
-No auth, message, comment or post records are removed.
+Views begin tracking when v3.8 is deployed; historic plays cannot be recovered.
+Database triggers maintain public per-Reel totals without exposing viewer identities.
+The viewer table is protected by per-account RLS, with no client permission to edit totals.
+
+Test
+Use two different accounts. From account B watch account A's Reel for at least 2
+seconds, then check the view badge and account A's Profile Reels grid. Reload and
+confirm the number persists. Replay with B and confirm it does not increase again.
